@@ -1,7 +1,7 @@
 # OpsPilot 🛰️
 ### Intelligent Cloud Infrastructure & AI Reliability Platform
 
-[![CI Pipeline](https://github.com/adityabhagwat/opspilot/actions/workflows/ci.yml/badge.svg)](https://github.com/adityabhagwat/opspilot/actions)
+[![CI Pipeline](https://github.com/adityabhagwat001/Opspilot1/actions/workflows/ci.yml/badge.svg)](https://github.com/adityabhagwat001/Opspilot1/actions)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![React](https://img.shields.io/badge/React-19+-61DAFB.svg?logo=react&logoColor=black)](https://react.dev)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9+-3178C6.svg?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
