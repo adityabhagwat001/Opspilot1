@@ -61,7 +61,7 @@ Full roadmap breakdown and milestone deliverables: [`docs/ROADMAP.md`](docs/ROAD
 
 ---
 
-## 🚀 Sprint 1 Deliverables (Current Milestone: `v0.1.0-alpha.1`)
+## 🚀 Sprint 1 Deliverables (Milestone: `v0.1.0-alpha.1`)
 
 - [x] **Architecture Specifications:** Complete design documents in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/API_SPEC.md`](docs/API_SPEC.md).
 - [x] **Architectural Decision Record (ADR):** Polyglot architecture rationale in [`docs/adr/0001-polyglot-architecture.md`](docs/adr/0001-polyglot-architecture.md).
@@ -71,6 +71,18 @@ Full roadmap breakdown and milestone deliverables: [`docs/ROADMAP.md`](docs/ROAD
 - [x] **Frontend SRE Console:** High-aesthetic dark-mode observability dashboard built with React, TypeScript, and Vite.
 - [x] **Node Collector Probe Skeleton:** Standalone agent probe daemon in [`agents/node_collector/`](agents/node_collector/).
 - [x] **Automated CI/CD:** GitHub Actions workflow in [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+
+---
+
+## 🔐 Sprint 2 Deliverables (Milestone: `v0.1.0-alpha.2`)
+
+- [x] **Asynchronous Database Architecture:** SQLAlchemy 2.0 with async engine, `async_sessionmaker`, and automatic schema synchronization.
+- [x] **Core Domain Models:** Complete relational models for `User` (RBAC), `Node` (Monitored Hosts), `TelemetryMetric` (Time-series metrics), `Incident` (Triage), and `AuditLog` (Immutable compliance).
+- [x] **Security & Cryptography Subsystem:** Native `bcrypt` password hashing, signed JWT Bearer access tokens with expiration, and cryptographically secure Agent API keys (`SHA-256`).
+- [x] **Authentication API:** Secure endpoints for registration (`/api/v1/auth/register`), login (`/api/v1/auth/login`), and profile inspection (`/api/v1/auth/me`).
+- [x] **Role-Based Access Control (RBAC):** Tiered role permissions (`admin`, `operator`, `viewer`) with auto-promotion of initial system bootstrap administrator.
+- [x] **Node Management Subsystem:** Endpoints for registering monitored servers (`/api/v1/nodes/register`), listing nodes, fetching details, and decommissioning nodes with role authorization.
+- [x] **Automated Test Suite Expansion:** 14/14 automated tests passing (100% pass rate) covering registration, JWT auth, RBAC enforcement, and node CRUD.
 
 ---
 
