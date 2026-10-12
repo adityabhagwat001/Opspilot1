@@ -1,4 +1,5 @@
 import json
+import os
 from typing import List, Union
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -8,13 +9,21 @@ class Settings(BaseSettings):
     """Global configuration settings for OpsPilot Core Backend."""
 
     PROJECT_NAME: str = "OpsPilot Core"
-    VERSION: str = "0.1.0"
+    VERSION: str = "0.2.0"
     API_V1_STR: str = "/api/v1"
     ENVIRONMENT: str = "development"
     HOST: str = "0.0.0.0"
     PORT: int = 8000
     CORS_ORIGINS: Union[List[str], str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
     LOG_LEVEL: str = "INFO"
+
+    # Database
+    DATABASE_URL: str = "sqlite+aiosqlite:///./data/opspilot.db"
+
+    # Security & JWT
+    JWT_SECRET: str = "opspilot-production-secret-change-in-prod-xyz-987"
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
