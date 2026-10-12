@@ -1,5 +1,6 @@
 import pytest
 from httpx import AsyncClient
+from app.core.config import settings
 
 
 @pytest.mark.asyncio
@@ -10,7 +11,7 @@ async def test_root_endpoint(client: AsyncClient):
     data = response.json()
     assert "service" in data
     assert "version" in data
-    assert data["service"] == "OpsPilot Core"
+    assert data["service"] == settings.PROJECT_NAME
 
 
 @pytest.mark.asyncio
@@ -20,7 +21,7 @@ async def test_health_endpoint(client: AsyncClient):
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "healthy"
-    assert data["version"] == "0.1.0"
+    assert data["version"] == settings.VERSION
     assert "uptime_seconds" in data
     assert "timestamp" in data
     assert "dependencies" in data
