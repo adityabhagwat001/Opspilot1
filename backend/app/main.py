@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import settings
 from app.core.logging import setup_logging, logger
+from app.db.session import init_db
 from app.api.v1.router import api_router
 
 
@@ -13,6 +14,8 @@ async def lifespan(app: FastAPI):
     """Lifespan event handler for application startup and shutdown."""
     setup_logging()
     logger.info(f"Starting {settings.PROJECT_NAME} v{settings.VERSION} [{settings.ENVIRONMENT}]")
+    # Initialize database schemas
+    await init_db()
     yield
     logger.info(f"Shutting down {settings.PROJECT_NAME}")
 
