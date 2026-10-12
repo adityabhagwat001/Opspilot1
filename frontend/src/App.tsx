@@ -131,7 +131,6 @@ export const App: React.FC = () => {
             <Activity size={20} color="#ffffff" />
           </div>
           <span className="brand-title">OpsPilot</span>
-          <span className="brand-tag">Sprint 1</span>
         </div>
 
         <div className="topbar-meta">
@@ -153,14 +152,13 @@ export const App: React.FC = () => {
 
       {/* Main Content Area */}
       <main className="main-content">
-        {/* Sprint 1 Banner */}
+        {/* Main Observability Banner */}
         <section className="sprint-banner">
           <div>
-            <div className="sprint-badge">Milestone v0.1.0-alpha.1 • 3-Month Plan (Sprint 1 of 15)</div>
-            <h1 className="sprint-banner-title">Architecture Foundation & Diagnostics Console</h1>
+            <div className="sprint-badge">Live Infrastructure Observability • Telemetry Engine</div>
+            <h1 className="sprint-banner-title">Infrastructure Telemetry & Diagnostic Console</h1>
             <p className="sprint-banner-desc">
-              Establishing polyglot architecture, clean FastAPI async backend, automated CI/CD pipeline,
-              and live telemetry health probe ingestion for continuous GitHub evaluation.
+              Real-time host telemetry ingestion, automated infrastructure health monitoring, and system diagnostics.
             </p>
           </div>
 
@@ -348,10 +346,10 @@ export const App: React.FC = () => {
       {/* Footer */}
       <footer className="footer">
         <div>
-          OpsPilot Platform &copy; 2026 • 6-Month Industry-Level Capstone Engineering Project
+          OpsPilot Platform &copy; 2026 • Intelligent Infrastructure & SRE Reliability Platform
         </div>
         <div>
-          Evaluation Sprint 1 of 15 • Tag: <span style={{ fontFamily: 'var(--font-mono)', color: '#38bdf8' }}>v0.1.0-alpha.1</span>
+          Platform Core • Tag: <span style={{ fontFamily: 'var(--font-mono)', color: '#38bdf8' }}>v0.1.0-alpha.1</span>
         </div>
       </footer>
     </div>
