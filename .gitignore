@@ -1,0 +1,39 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+dist/
+build/
+.npm/
+
+# Environment and secrets
+.env
+.env.local
+*.pem
+*.key
+*.token
+credentials.json
+token.json
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Database files
+*.sqlite3
+*.db
+
+# Logs
+*.log
+logs/
