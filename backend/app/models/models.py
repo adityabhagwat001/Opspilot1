@@ -110,18 +110,30 @@ class ApprovalRequest(Base):
     id: Mapped[str] = mapped_column(String(50), primary_key=True, default=generate_uuid)
     execution_id: Mapped[str] = mapped_column(String(50), ForeignKey("agent_executions.id"), nullable=False)
     requesting_user_id: Mapped[str] = mapped_column(String(50), ForeignKey("users.id"), nullable=False)
-    workspace_id: Mapped[str] = mapped_column(String(50), default="default-ops")
+    workspace_id: Mapped[str] = mapped_column(String(50), default="default-ops", index=True)
     target_system: Mapped[str] = mapped_column(String(50), nullable=False)  # postgresql, github, email, calendar
     tool_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    target_resource: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     canonical_action_arguments: Mapped[str] = mapped_column(Text, nullable=False)  # JSON
     action_summary: Mapped[str] = mapped_column(Text, nullable=False)
     action_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    approval_status: Mapped[str] = mapped_column(String(30), default="pending")  # pending, approved, rejected, expired
+    nonce: Mapped[Optional[str]] = mapped_column(String(64), unique=True, nullable=True, index=True)
+    approval_status: Mapped[str] = mapped_column(String(30), default="pending", index=True)  # pending, executing, succeeded, failed, rejected, expired, superseded
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now)
     expires_at: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False)
     approved_by: Mapped[Optional[str]] = mapped_column(String(50), ForeignKey("users.id"), nullable=True)
     approved_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)
     execution_result: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON
+
+class ConsumedApprovalToken(Base):
+    __tablename__ = "consumed_approval_tokens"
+
+    nonce: Mapped[str] = mapped_column(String(64), primary_key=True)
+    approval_id: Mapped[str] = mapped_column(String(50), ForeignKey("approval_requests.id"), nullable=False)
+    tool_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    workspace_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    action_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    consumed_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now)
 
 class AuditLog(Base):
     __tablename__ = "audit_logs"
@@ -129,6 +141,8 @@ class AuditLog(Base):
     id: Mapped[str] = mapped_column(String(50), primary_key=True, default=generate_uuid)
     user_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     workspace_id: Mapped[str] = mapped_column(String(50), default="default-ops", index=True)
+    execution_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
+    correlation_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     action_type: Mapped[str] = mapped_column(String(50), nullable=False)  # READ_QUERY, WRITE_PROPOSED, APPROVAL_GRANTED, APPROVAL_REJECTED, WRITE_EXECUTED
     target_system: Mapped[str] = mapped_column(String(50), nullable=False)
     tool_name: Mapped[str] = mapped_column(String(100), nullable=False)

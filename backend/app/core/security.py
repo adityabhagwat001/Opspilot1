@@ -1,16 +1,17 @@
 """
 Security & Cryptographic Boundary for OpsPilot Enterprise Platform
-Handles password hashing, JWT authentication, and unforgeable Approval Token generation.
+Handles password hashing, JWT authentication, and unforgeable Approval Token generation with single-use nonce consumption.
 """
 
 import os
+import uuid
 import hmac
 import hashlib
 import json
 import datetime
 import bcrypt
 import jwt
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Callable
 from app.core.config import settings
 
 def hash_password(password: str) -> str:
@@ -42,21 +43,28 @@ def decode_access_token(token: str) -> Optional[dict]:
 def compute_action_hash(tool_name: str, arguments: Dict[str, Any]) -> str:
     """
     Computes deterministic SHA256 hash of canonical tool arguments.
-    Ensures that any tampering or modification of parameters invalidates approval.
+    Excludes ephemeral tokens, strictly sorts keys.
+    Any tampering or modification of parameters invalidates approval.
     """
-    clean_args = {k: v for k, v in arguments.items() if k != "approval_token"}
+    clean_args = {k: v for k, v in arguments.items() if k not in ("approval_token", "workspace_id")}
     canonical = f"{tool_name}:{json.dumps(clean_args, sort_keys=True)}"
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
-def generate_approval_token(tool_name: str, arguments: Dict[str, Any]) -> str:
+def generate_approval_token(
+    tool_name: str,
+    arguments: Dict[str, Any],
+    workspace_id: str = "default-ops",
+    nonce: Optional[str] = None
+) -> str:
     """
-    Cryptographically signs an approval token for this EXACT tool and parameters.
-    Format: timestamp.action_hash.signature
+    Cryptographically signs an approval token for this EXACT tool, workspace, and parameters.
+    Format: nonce.timestamp.action_hash.signature
     Valid for 15 minutes. The LLM cannot generate this token.
     """
+    token_nonce = nonce or str(uuid.uuid4())
     timestamp = str(int(datetime.datetime.now(datetime.timezone.utc).timestamp()))
     action_hash = compute_action_hash(tool_name, arguments)
-    canonical = f"{tool_name}:{timestamp}:{action_hash}"
+    canonical = f"{tool_name}:{workspace_id}:{token_nonce}:{timestamp}:{action_hash}"
     
     signature = hmac.new(
         settings.APPROVAL_SECRET.encode("utf-8"),
@@ -64,30 +72,54 @@ def generate_approval_token(tool_name: str, arguments: Dict[str, Any]) -> str:
         hashlib.sha256
     ).hexdigest()
     
-    return f"{timestamp}.{action_hash}.{signature}"
+    return f"{token_nonce}.{timestamp}.{action_hash}.{signature}"
 
-def verify_approval_token(tool_name: str, arguments: Dict[str, Any], approval_token: str) -> bool:
+def verify_approval_token(
+    tool_name: str,
+    arguments: Dict[str, Any],
+    approval_token: str,
+    workspace_id: str = "default-ops",
+    consumed_nonces: Optional[set] = None
+) -> bool:
     """
-    Validates token signature and freshness.
+    Validates token signature, freshness, parameter integrity, and prevents replay attacks.
     """
     if not approval_token:
         return False
     try:
         parts = approval_token.split(".")
-        if len(parts) != 3:
+        if len(parts) != 4:
             return False
-        timestamp_str, token_action_hash, signature = parts
+        nonce, timestamp_str, token_action_hash, signature = parts
+
+        # 1. Check expiration (15 minutes)
         token_time = int(timestamp_str)
         now = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
         if now - token_time > (settings.APPROVAL_EXPIRE_MINUTES * 60) or token_time - now > 60:
             return False
 
-        canonical = f"{tool_name}:{timestamp_str}:{token_action_hash}"
+        # 2. Check parameter hash integrity: actual arguments MUST match token hash!
+        actual_hash = compute_action_hash(tool_name, arguments)
+        if not hmac.compare_digest(actual_hash, token_action_hash):
+            return False
+
+        # 3. Check HMAC signature with tool, workspace, nonce, timestamp, and hash
+        canonical = f"{tool_name}:{workspace_id}:{nonce}:{timestamp_str}:{token_action_hash}"
         expected_sig = hmac.new(
             settings.APPROVAL_SECRET.encode("utf-8"),
             canonical.encode("utf-8"),
             hashlib.sha256
         ).hexdigest()
-        return hmac.compare_digest(signature, expected_sig)
+        
+        if not hmac.compare_digest(signature, expected_sig):
+            return False
+
+        # 4. Check single-use consumption if tracking set provided
+        if consumed_nonces is not None:
+            if nonce in consumed_nonces:
+                return False  # Replay attack blocked!
+            consumed_nonces.add(nonce)
+
+        return True
     except Exception:
         return False

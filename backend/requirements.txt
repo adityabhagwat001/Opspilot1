@@ -1,0 +1,35 @@
+# OpsPilot Core Backend Dependencies (Locked & Pinned for Python 3.11 - 3.13)
+fastapi==0.143.0
+uvicorn[standard]==0.54.0
+pydantic==2.14.1
+pydantic-settings==2.15.0
+sqlalchemy[asyncio]==2.1.4
+greenlet==3.5.6
+aiosqlite==0.22.1
+asyncpg==0.32.0
+alembic==1.20.0
+
+# Security & Authentication
+pyjwt[crypto]==2.15.1
+bcrypt==5.0.0
+python-multipart==0.0.32
+cryptography==50.0.2
+
+# MCP & FastMCP
+mcp==2.3.0
+fastmcp==4.1.0
+
+# Agentic AI & LangGraph
+langgraph==1.2.15
+langgraph-checkpoint==4.3.0
+langchain==1.4.5
+langchain-core==1.6.10
+langchain-openai==1.7.1
+
+# HTTP Clients & Utilities
+httpx==0.28.1
+python-dotenv==1.2.4
+
+# Testing
+pytest==9.1.1
+pytest-asyncio==1.4.0

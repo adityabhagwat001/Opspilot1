@@ -1,6 +1,6 @@
 """
 Automated Unit and Integration Tests for OpsPilot Custom FastMCP Servers
-Tests tool discovery, read operations, schema validation, and write boundary rejection.
+Tests tool discovery, typed response envelopes, schema validation, and write boundary rejection.
 """
 
 import pytest
@@ -35,7 +35,11 @@ async def test_postgres_mcp_tool_discovery():
 
 @pytest.mark.asyncio
 async def test_postgres_mcp_read_incidents():
-    incidents = await list_incidents()
+    envelope = await list_incidents()
+    assert envelope["success"] is True
+    assert envelope["system"] == "postgresql"
+    assert envelope["is_write"] is False
+    incidents = envelope["data"]
     assert isinstance(incidents, list)
     assert len(incidents) >= 1
     first = incidents[0]
@@ -50,7 +54,9 @@ async def test_postgres_mcp_write_requires_approval():
         title="Unauthorized Task",
         description="Should be rejected by FastMCP approval gate"
     )
-    assert res.get("status") == "APPROVAL_REQUIRED"
+    assert res["success"] is False
+    assert res["is_write"] is True
+    assert res.get("error_category") == "APPROVAL_REQUIRED" or res.get("status") == "APPROVAL_REQUIRED"
     assert "WRITE_APPROVAL_REQUIRED" in res.get("error", "")
 
 @pytest.mark.asyncio
@@ -69,13 +75,18 @@ async def test_github_mcp_write_requires_approval():
         title="Unapproved Issue",
         body="Must fail without cryptographic token"
     )
-    assert res.get("status") == "APPROVAL_REQUIRED"
+    assert res["success"] is False
+    assert res["is_write"] is True
+    assert res.get("error_category") == "APPROVAL_REQUIRED" or res.get("status") == "APPROVAL_REQUIRED"
+    assert "WRITE_APPROVAL_REQUIRED" in res.get("error", "")
 
 @pytest.mark.asyncio
 async def test_productivity_mcp_read_messages():
-    res = await list_messages(max_results=5)
-    assert "messages" in res
-    assert len(res["messages"]) >= 1
+    envelope = await list_messages(max_results=5)
+    assert envelope["success"] is True
+    assert envelope["system"] == "email"
+    assert "messages" in envelope["data"]
+    assert len(envelope["data"]["messages"]) >= 1
 
 @pytest.mark.asyncio
 async def test_productivity_mcp_send_email_requires_approval():
@@ -84,4 +95,7 @@ async def test_productivity_mcp_send_email_requires_approval():
         subject="Unapproved Notice",
         body="Must be blocked"
     )
-    assert res.get("status") == "APPROVAL_REQUIRED"
+    assert res["success"] is False
+    assert res["is_write"] is True
+    assert res.get("error_category") == "APPROVAL_REQUIRED" or res.get("status") == "APPROVAL_REQUIRED"
+    assert "WRITE_APPROVAL_REQUIRED" in res.get("error", "")

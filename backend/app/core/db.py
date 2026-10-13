@@ -23,6 +23,20 @@ async def get_db():
 async def init_system_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        
+        def _migrate(sync_conn):
+            from sqlalchemy import text
+            for tbl, col, typ in [
+                ("approval_requests", "target_resource", "VARCHAR(255)"),
+                ("approval_requests", "nonce", "VARCHAR(64)"),
+                ("audit_logs", "execution_id", "VARCHAR(50)"),
+                ("audit_logs", "correlation_id", "VARCHAR(64)")
+            ]:
+                try:
+                    sync_conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN {col} {typ}"))
+                except Exception:
+                    pass
+        await conn.run_sync(_migrate)
 
     async with AsyncSessionLocal() as session:
         # Check if default workspace exists
@@ -63,6 +77,20 @@ async def init_system_db():
                 is_active=True
             )
             session.add(operator)
+
+        # Ensure workspace memberships exist
+        for u_id, u_role in [("usr-admin-01", "admin"), ("usr-operator-01", "operator")]:
+            mem_stmt = select(WorkspaceMember).where(
+                WorkspaceMember.workspace_id == "default-ops",
+                WorkspaceMember.user_id == u_id
+            )
+            existing_mem = (await session.execute(mem_stmt)).scalar_one_or_none()
+            if not existing_mem:
+                session.add(WorkspaceMember(
+                    workspace_id="default-ops",
+                    user_id=u_id,
+                    role=u_role
+                ))
 
         # Ensure default connections are registered
         for provider, name in [

@@ -1,6 +1,6 @@
 """
 Approval Center Endpoints
-Enforces human authorization decisions, parameter verification, and execution.
+Enforces human authorization decisions, parameter verification, workspace isolation, and execution.
 """
 
 import json
@@ -9,8 +9,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.core.db import get_db
-from app.auth.deps import get_current_user, require_role
-from app.models.models import User, ApprovalRequest
+from app.auth.deps import get_current_user, require_role, get_current_workspace_member
+from app.models.models import User, ApprovalRequest, WorkspaceMember
 from app.schemas.schemas import ApprovalDecisionRequest
 from app.approvals.approval_service import approval_service
 
@@ -20,9 +20,14 @@ router = APIRouter(prefix="/approvals", tags=["Approval Center"])
 async def list_approvals(
     status_filter: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user)
+    user: User = Depends(get_current_user),
+    member: WorkspaceMember = Depends(get_current_workspace_member)
 ):
-    query = select(ApprovalRequest).order_by(ApprovalRequest.created_at.desc())
+    query = (
+        select(ApprovalRequest)
+        .where(ApprovalRequest.workspace_id == member.workspace_id)
+        .order_by(ApprovalRequest.created_at.desc())
+    )
     if status_filter:
         query = query.where(ApprovalRequest.approval_status == status_filter)
     
@@ -52,12 +57,16 @@ async def list_approvals(
 async def get_approval(
     approval_id: str,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user)
+    user: User = Depends(get_current_user),
+    member: WorkspaceMember = Depends(get_current_workspace_member)
 ):
-    stmt = select(ApprovalRequest).where(ApprovalRequest.id == approval_id)
+    stmt = select(ApprovalRequest).where(
+        ApprovalRequest.id == approval_id,
+        ApprovalRequest.workspace_id == member.workspace_id
+    )
     r = (await db.execute(stmt)).scalar_one_or_none()
     if not r:
-        raise HTTPException(status_code=404, detail="Approval request not found")
+        raise HTTPException(status_code=404, detail="Approval request not found or access denied")
 
     return {
         "id": r.id,
@@ -78,11 +87,22 @@ async def get_approval(
 async def approve_request(
     approval_id: str,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_role(["admin", "operator"]))
+    user: User = Depends(require_role(["admin", "operator"])),
+    member: WorkspaceMember = Depends(get_current_workspace_member)
 ):
     """
     Approves the exact proposed write action and executes it with an issued cryptographic token.
+    Enforces workspace membership and role restrictions.
     """
+    # Verify approval exists and belongs to the caller's workspace
+    check_stmt = select(ApprovalRequest).where(
+        ApprovalRequest.id == approval_id,
+        ApprovalRequest.workspace_id == member.workspace_id
+    )
+    req = (await db.execute(check_stmt)).scalar_one_or_none()
+    if not req:
+        raise HTTPException(status_code=404, detail="Approval request not found or unauthorized.")
+
     res = await approval_service.approve_and_execute(
         db=db,
         approval_id=approval_id,
@@ -97,11 +117,20 @@ async def reject_request(
     approval_id: str,
     payload: ApprovalDecisionRequest = ApprovalDecisionRequest(),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_role(["admin", "operator"]))
+    user: User = Depends(require_role(["admin", "operator"])),
+    member: WorkspaceMember = Depends(get_current_workspace_member)
 ):
     """
     Rejects the proposed write action. Guarantees no tool execution occurs.
     """
+    check_stmt = select(ApprovalRequest).where(
+        ApprovalRequest.id == approval_id,
+        ApprovalRequest.workspace_id == member.workspace_id
+    )
+    req = (await db.execute(check_stmt)).scalar_one_or_none()
+    if not req:
+        raise HTTPException(status_code=404, detail="Approval request not found or unauthorized.")
+
     res = await approval_service.reject_request(
         db=db,
         approval_id=approval_id,

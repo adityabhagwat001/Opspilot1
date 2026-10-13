@@ -18,13 +18,7 @@ export const App: React.FC = () => {
   const fetchSession = async () => {
     const token = localStorage.getItem('opspilot_token');
     if (!token) {
-      // Default fallback demo user for seamless evaluation
-      setUser({
-        id: 'usr-admin-01',
-        email: 'admin@opspilot.internal',
-        full_name: 'Enterprise Admin',
-        role: 'admin'
-      });
+      setUser(null);
       setLoading(false);
       return;
     }
@@ -34,12 +28,17 @@ export const App: React.FC = () => {
       setUser(u);
     } catch {
       localStorage.removeItem('opspilot_token');
+      setUser(null);
     } finally {
       setLoading(false);
     }
   };
 
   const fetchPendingApprovals = async () => {
+    if (!localStorage.getItem('opspilot_token')) {
+      setPendingApprovalsCount(0);
+      return;
+    }
     try {
       const apps = await api.getApprovals('pending');
       setPendingApprovalsCount(apps.length);
@@ -50,14 +49,20 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     fetchSession();
-    fetchPendingApprovals();
-    const interval = setInterval(fetchPendingApprovals, 10000);
-    return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    if (user) {
+      fetchPendingApprovals();
+      const interval = setInterval(fetchPendingApprovals, 10000);
+      return () => clearInterval(interval);
+    }
+  }, [user]);
 
   const handleLogout = () => {
     localStorage.removeItem('opspilot_token');
     setUser(null);
+    setPendingApprovalsCount(0);
   };
 
   const handleLoginSuccess = (loggedInUser: User) => {
@@ -76,24 +81,34 @@ export const App: React.FC = () => {
   return (
     <Router>
       <div className="min-h-screen bg-[#070b14] flex flex-col text-slate-100">
-        <Navbar
-          user={user}
-          pendingApprovalsCount={pendingApprovalsCount}
-          onLogout={handleLogout}
-        />
+        {user && (
+          <Navbar
+            user={user}
+            pendingApprovalsCount={pendingApprovalsCount}
+            onLogout={handleLogout}
+          />
+        )}
 
         <main className="flex-1">
           <Routes>
-            <Route path="/" element={<DashboardPage />} />
-            <Route path="/chat" element={<ChatPage />} />
-            <Route path="/approvals" element={<ApprovalsPage />} />
-            <Route path="/integrations" element={<IntegrationsPage />} />
-            <Route path="/audit" element={<AuditPage />} />
             <Route
               path="/login"
-              element={<LoginPage onLoginSuccess={handleLoginSuccess} />}
+              element={
+                user ? <Navigate to="/" replace /> : <LoginPage onLoginSuccess={handleLoginSuccess} />
+              }
             />
-            <Route path="*" element={<Navigate to="/" replace />} />
+            {user ? (
+              <>
+                <Route path="/" element={<DashboardPage />} />
+                <Route path="/chat" element={<ChatPage />} />
+                <Route path="/approvals" element={<ApprovalsPage />} />
+                <Route path="/integrations" element={<IntegrationsPage />} />
+                <Route path="/audit" element={<AuditPage />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </>
+            ) : (
+              <Route path="*" element={<Navigate to="/login" replace />} />
+            )}
           </Routes>
         </main>
       </div>

@@ -1,5 +1,6 @@
 """
 Enterprise Audit Log Endpoints
+Enforces workspace isolation, search/filter, and comprehensive telemetry correlation.
 """
 
 import json
@@ -8,8 +9,8 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.core.db import get_db
-from app.auth.deps import get_current_user
-from app.models.models import User, AuditLog
+from app.auth.deps import get_current_user, get_current_workspace_member
+from app.models.models import User, AuditLog, WorkspaceMember
 
 router = APIRouter(prefix="/audit", tags=["Audit Logs"])
 
@@ -19,9 +20,15 @@ async def get_audit_logs(
     system_filter: Optional[str] = None,
     action_filter: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user)
+    user: User = Depends(get_current_user),
+    member: WorkspaceMember = Depends(get_current_workspace_member)
 ):
-    query = select(AuditLog).order_by(AuditLog.created_at.desc()).limit(limit)
+    query = (
+        select(AuditLog)
+        .where(AuditLog.workspace_id == member.workspace_id)
+        .order_by(AuditLog.created_at.desc())
+        .limit(limit)
+    )
     if system_filter:
         query = query.where(AuditLog.target_system == system_filter)
     if action_filter:
@@ -34,6 +41,9 @@ async def get_audit_logs(
         {
             "id": l.id,
             "user_id": l.user_id,
+            "workspace_id": l.workspace_id,
+            "execution_id": l.execution_id,
+            "correlation_id": l.correlation_id,
             "action_type": l.action_type,
             "target_system": l.target_system,
             "tool_name": l.tool_name,

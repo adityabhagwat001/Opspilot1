@@ -117,6 +117,8 @@ class MCPToolRouter:
             m = SERVER_MAPPING[tool_name]
             if m == pg_mcp: return "postgresql"
             if m == gh_mcp: return "github"
+            if any(k in tool_name for k in ["message", "mail"]): return "email"
+            if any(k in tool_name for k in ["calendar", "event", "availability"]): return "calendar"
             return "productivity"
         return "unknown"
 

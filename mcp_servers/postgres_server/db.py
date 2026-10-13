@@ -11,8 +11,10 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy import String, Text, DateTime, ForeignKey, select, update, insert, func
 
-# Default connection: can be overridden via OPS_DATABASE_URL or DATABASE_URL
-DEFAULT_DB_URL = os.getenv("OPS_DATABASE_URL", os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./operational_data.db"))
+# Resolve absolute path to operational_data.db in project root so queries work from any working directory
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+DEFAULT_DB_FILE = os.path.join(PROJECT_ROOT, "operational_data.db").replace("\\", "/")
+DEFAULT_DB_URL = os.getenv("OPS_DATABASE_URL", f"sqlite+aiosqlite:///{DEFAULT_DB_FILE}")
 
 def utc_now() -> datetime.datetime:
     return datetime.datetime.now(datetime.timezone.utc)
