@@ -71,6 +71,84 @@ class ProductivityStore:
         self.engine = create_async_engine(db_url, echo=False)
         self.session_factory = async_sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)
 
+    async def init_db(self):
+        """
+        Explicit administrative initialization & seeding for operational mailbox and calendar.
+        Called only by administrative scripts, never by read tools.
+        """
+        async with self.engine.begin() as conn:
+            await conn.run_sync(ProductivityBase.metadata.create_all)
+        
+        async with self.session_factory() as session:
+            count = await session.scalar(select(EmailMessage).limit(1))
+            if count is None:
+                await self._seed(session)
+
+    async def _seed(self, session: AsyncSession):
+        now = utc_now()
+        emails = [
+            EmailMessage(
+                id="MSG-801",
+                sender="alert-manager@enterprise.internal",
+                recipient="ops-oncall@enterprise.internal",
+                subject="CRITICAL: Deployment pipeline stalled on canary stage",
+                body="Automated canary deployment for auth-service v2.4.1 failed health checks with 4.2% error rate. Rollback requested.",
+                is_unread=True,
+                is_draft=False,
+                thread_id="TH-101",
+                created_at=now - datetime.timedelta(hours=2)
+            ),
+            EmailMessage(
+                id="MSG-802",
+                sender="cto@enterprise.internal",
+                recipient="engineering-leads@enterprise.internal",
+                subject="Operational incident update and postmortem review",
+                body="Please ensure postmortem reviews for today's auth service latency spike are scheduled before Friday 4 PM.",
+                is_unread=True,
+                is_draft=False,
+                thread_id="TH-102",
+                created_at=now - datetime.timedelta(hours=5)
+            ),
+            EmailMessage(
+                id="MSG-803",
+                sender="infra-bot@enterprise.internal",
+                recipient="ops@enterprise.internal",
+                subject="Scheduled maintenance window: Redis Cluster Upgrade",
+                body="Notice: Secondary Redis node upgrade scheduled for Sunday at 02:00 UTC. Expected downtime under 60 seconds.",
+                is_unread=False,
+                is_draft=False,
+                thread_id="TH-103",
+                created_at=now - datetime.timedelta(days=1)
+            ),
+        ]
+        session.add_all(emails)
+
+        tomorrow = now.date() + datetime.timedelta(days=1)
+        events = [
+            CalendarEvent(
+                id="EVT-901",
+                title="Daily Operations Standup",
+                description="Daily operational review of active incidents and CI/CD status.",
+                start_time=datetime.datetime.combine(tomorrow, datetime.time(10, 0), tzinfo=datetime.timezone.utc),
+                end_time=datetime.datetime.combine(tomorrow, datetime.time(10, 30), tzinfo=datetime.timezone.utc),
+                attendees=json.dumps(["ops-team@enterprise.internal", "oncall@enterprise.internal"]),
+                calendar_id="primary",
+                status="confirmed"
+            ),
+            CalendarEvent(
+                id="EVT-902",
+                title="Incident INC-101 Postmortem Review",
+                description="Root cause analysis of auth service connection pool exhaustion.",
+                start_time=datetime.datetime.combine(tomorrow, datetime.time(15, 0), tzinfo=datetime.timezone.utc),
+                end_time=datetime.datetime.combine(tomorrow, datetime.time(16, 0), tzinfo=datetime.timezone.utc),
+                attendees=json.dumps(["aditya.b@enterprise.internal", "cto@enterprise.internal", "eng-leads@enterprise.internal"]),
+                calendar_id="primary",
+                status="confirmed"
+            ),
+        ]
+        session.add_all(events)
+        await session.commit()
+
 prod_store = ProductivityStore(MAIL_DB_URL)
 
 def compute_action_hash(tool_name: str, arguments: Dict[str, Any]) -> str:
