@@ -81,7 +81,7 @@ async def init_system_db():
                     workspace_id="default-ops",
                     provider=provider,
                     status="connected",
-                    details_json=json.dumps({"name": name, "verified_at": datetime.datetime.utcnow().isoformat() + "Z"})
+                    details_json=json.dumps({"name": name, "verified_at": datetime.datetime.now(datetime.timezone.utc).isoformat() + "Z"})
                 )
                 session.add(conn_rec)
 

@@ -22,6 +22,9 @@ mcp = FastMCP("opspilot-productivity-server")
 APPROVAL_SECRET = os.getenv("OPSPILOT_APPROVAL_SECRET", "opspilot_trusted_approval_boundary_secret_key_32chars")
 MAIL_DB_URL = os.getenv("OPS_DATABASE_URL", "sqlite+aiosqlite:///./operational_data.db")
 
+def utc_now() -> datetime.datetime:
+    return datetime.datetime.now(datetime.timezone.utc)
+
 class ProductivityBase(DeclarativeBase):
     pass
 
@@ -36,7 +39,7 @@ class EmailMessage(ProductivityBase):
     is_unread: Mapped[bool] = mapped_column(Boolean, default=True)
     is_draft: Mapped[bool] = mapped_column(Boolean, default=False)
     thread_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=datetime.datetime.utcnow)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now)
 
 class CalendarEvent(ProductivityBase):
     __tablename__ = "productivity_calendar_events"
@@ -49,7 +52,7 @@ class CalendarEvent(ProductivityBase):
     attendees: Mapped[str] = mapped_column(Text, default="[]")  # JSON encoded list of emails
     calendar_id: Mapped[str] = mapped_column(String(50), default="primary")
     status: Mapped[str] = mapped_column(String(30), default="confirmed")  # confirmed, cancelled
-    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=datetime.datetime.utcnow)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now)
 
 class ProductivityStore:
     def __init__(self, db_url: str):
@@ -66,7 +69,7 @@ class ProductivityStore:
                 await self._seed(session)
 
     async def _seed(self, session: AsyncSession):
-        now = datetime.datetime.utcnow()
+        now = utc_now()
         emails = [
             EmailMessage(
                 id="MSG-801",
@@ -141,7 +144,7 @@ def verify_approval_token(tool_name: str, args: Dict[str, Any], approval_token: 
             return False
         timestamp_str, token_action_hash, signature = parts
         token_time = int(timestamp_str)
-        now = int(datetime.datetime.utcnow().timestamp())
+        now = int(utc_now().timestamp())
         if now - token_time > 900 or token_time - now > 60:
             return False
 
@@ -314,7 +317,7 @@ async def create_email_draft(
         body=body,
         is_unread=False,
         is_draft=True,
-        created_at=datetime.datetime.utcnow()
+        created_at=utc_now()
     )
 
     async with prod_store.session_factory() as session:
@@ -327,7 +330,7 @@ async def create_email_draft(
         "draft_id": draft_id,
         "recipient": recipient,
         "subject": subject,
-        "created_at": datetime.datetime.utcnow().isoformat() + "Z"
+        "created_at": utc_now().isoformat() + "Z"
     }
 
 @mcp.tool()
@@ -362,7 +365,7 @@ async def send_email(
         body=body,
         is_unread=False,
         is_draft=False,
-        created_at=datetime.datetime.utcnow()
+        created_at=utc_now()
     )
 
     async with prod_store.session_factory() as session:
@@ -375,7 +378,7 @@ async def send_email(
         "message_id": msg_id,
         "recipient": recipient,
         "subject": subject,
-        "sent_at": datetime.datetime.utcnow().isoformat() + "Z",
+        "sent_at": utc_now().isoformat() + "Z",
         "delivered": True
     }
 
@@ -543,7 +546,7 @@ async def create_calendar_event(
         attendees=json.dumps(attendees or []),
         calendar_id=calendar_id,
         status="confirmed",
-        created_at=datetime.datetime.utcnow()
+        created_at=utc_now()
     )
 
     async with prod_store.session_factory() as session:

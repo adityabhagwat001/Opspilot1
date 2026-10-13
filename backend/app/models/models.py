@@ -15,6 +15,9 @@ class Base(DeclarativeBase):
 def generate_uuid() -> str:
     return str(uuid.uuid4())
 
+def utc_now() -> datetime.datetime:
+    return datetime.datetime.now(datetime.timezone.utc)
+
 class User(Base):
     __tablename__ = "users"
 
@@ -24,7 +27,7 @@ class User(Base):
     full_name: Mapped[str] = mapped_column(String(100), nullable=False)
     role: Mapped[str] = mapped_column(String(20), default="operator")  # admin, operator, viewer
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=datetime.datetime.utcnow)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now)
 
 class Workspace(Base):
     __tablename__ = "workspaces"
@@ -32,7 +35,7 @@ class Workspace(Base):
     id: Mapped[str] = mapped_column(String(50), primary_key=True, default=generate_uuid)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     slug: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
-    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=datetime.datetime.utcnow)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now)
 
 class WorkspaceMember(Base):
     __tablename__ = "workspace_members"
@@ -50,7 +53,7 @@ class IntegrationConnection(Base):
     provider: Mapped[str] = mapped_column(String(50), nullable=False)  # postgresql, github, email, calendar
     status: Mapped[str] = mapped_column(String(30), default="connected")  # connected, disconnected, error
     details_json: Mapped[str] = mapped_column(Text, default="{}")
-    last_sync_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=datetime.datetime.utcnow)
+    last_sync_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now)
 
 class AgentConversation(Base):
     __tablename__ = "agent_conversations"
@@ -59,8 +62,8 @@ class AgentConversation(Base):
     workspace_id: Mapped[str] = mapped_column(String(50), default="default-ops", index=True)
     user_id: Mapped[str] = mapped_column(String(50), ForeignKey("users.id"), nullable=False)
     title: Mapped[str] = mapped_column(String(255), default="Operational Session")
-    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=datetime.datetime.utcnow)
-    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
 class AgentMessage(Base):
     __tablename__ = "agent_messages"
@@ -71,7 +74,7 @@ class AgentMessage(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     tool_calls_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     tool_results_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=datetime.datetime.utcnow)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now)
 
 class AgentExecution(Base):
     __tablename__ = "agent_executions"
@@ -87,8 +90,8 @@ class AgentExecution(Base):
     completed_actions_json: Mapped[str] = mapped_column(Text, default="[]")
     final_response: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=datetime.datetime.utcnow)
-    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
 class ExecutionStep(Base):
     __tablename__ = "execution_steps"
@@ -99,7 +102,7 @@ class ExecutionStep(Base):
     step_name: Mapped[str] = mapped_column(String(100), nullable=False)
     status: Mapped[str] = mapped_column(String(30), default="started")  # started, completed, awaiting_approval, failed
     details_json: Mapped[str] = mapped_column(Text, default="{}")
-    timestamp: Mapped[datetime.datetime] = mapped_column(DateTime, default=datetime.datetime.utcnow)
+    timestamp: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now)
 
 class ApprovalRequest(Base):
     __tablename__ = "approval_requests"
@@ -114,7 +117,7 @@ class ApprovalRequest(Base):
     action_summary: Mapped[str] = mapped_column(Text, nullable=False)
     action_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     approval_status: Mapped[str] = mapped_column(String(30), default="pending")  # pending, approved, rejected, expired
-    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=datetime.datetime.utcnow)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now)
     expires_at: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False)
     approved_by: Mapped[Optional[str]] = mapped_column(String(50), ForeignKey("users.id"), nullable=True)
     approved_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)
@@ -133,4 +136,4 @@ class AuditLog(Base):
     approval_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     result_summary: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(20), default="success")  # success, failure, rejected
-    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=datetime.datetime.utcnow)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now)

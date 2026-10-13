@@ -4,9 +4,11 @@ OpsPilot Enterprise Configuration Settings
 
 import os
 from typing import Optional
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(case_sensitive=True, extra="allow")
+    
     PROJECT_NAME: str = "OpsPilot Enterprise AI Platform"
     ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
@@ -33,9 +35,5 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: Optional[str] = os.getenv("OPENAI_API_KEY", "")
     ANTHROPIC_API_KEY: Optional[str] = os.getenv("ANTHROPIC_API_KEY", "")
     OPENROUTER_API_KEY: Optional[str] = os.getenv("OPENROUTER_API_KEY", "")
-
-    class Config:
-        case_sensitive = True
-        extra = "allow"
 
 settings = Settings()

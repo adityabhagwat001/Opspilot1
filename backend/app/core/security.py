@@ -25,11 +25,12 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def create_access_token(data: dict, expires_delta: Optional[datetime.timedelta] = None) -> str:
     to_encode = data.copy()
+    now = datetime.datetime.now(datetime.timezone.utc)
     if expires_delta:
-        expire = datetime.datetime.utcnow() + expires_delta
+        expire = now + expires_delta
     else:
-        expire = datetime.datetime.utcnow() + datetime.timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire, "iat": datetime.datetime.utcnow()})
+        expire = now + datetime.timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire, "iat": now})
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 def decode_access_token(token: str) -> Optional[dict]:
@@ -53,7 +54,7 @@ def generate_approval_token(tool_name: str, arguments: Dict[str, Any]) -> str:
     Format: timestamp.action_hash.signature
     Valid for 15 minutes. The LLM cannot generate this token.
     """
-    timestamp = str(int(datetime.datetime.utcnow().timestamp()))
+    timestamp = str(int(datetime.datetime.now(datetime.timezone.utc).timestamp()))
     action_hash = compute_action_hash(tool_name, arguments)
     canonical = f"{tool_name}:{timestamp}:{action_hash}"
     
@@ -77,7 +78,7 @@ def verify_approval_token(tool_name: str, arguments: Dict[str, Any], approval_to
             return False
         timestamp_str, token_action_hash, signature = parts
         token_time = int(timestamp_str)
-        now = int(datetime.datetime.utcnow().timestamp())
+        now = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
         if now - token_time > (settings.APPROVAL_EXPIRE_MINUTES * 60) or token_time - now > 60:
             return False
 

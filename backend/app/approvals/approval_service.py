@@ -32,7 +32,7 @@ class ApprovalService:
         Creates a persisted, cryptographic pending approval request.
         Pauses execution until explicit human authorization is granted.
         """
-        now = datetime.datetime.utcnow()
+        now = datetime.datetime.now(datetime.timezone.utc)
         expires_at = now + datetime.timedelta(minutes=15)
         
         # Clean arguments from any previous token
@@ -102,7 +102,7 @@ class ApprovalService:
                 "error": f"Cannot approve request in '{approval.approval_status}' state."
             }
 
-        now = datetime.datetime.utcnow()
+        now = datetime.datetime.now(datetime.timezone.utc)
         if now > approval.expires_at:
             approval.approval_status = "expired"
             await db.commit()
@@ -193,7 +193,7 @@ class ApprovalService:
 
         approval.approval_status = "rejected"
         approval.approved_by = user_id
-        approval.approved_at = datetime.datetime.utcnow()
+        approval.approved_at = datetime.datetime.now(datetime.timezone.utc)
         approval.execution_result = json.dumps({"rejected": True, "reason": reason or "Rejected by user."})
 
         # Update Agent Execution

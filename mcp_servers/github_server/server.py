@@ -41,7 +41,7 @@ def verify_approval_token(tool_name: str, args: Dict[str, Any], approval_token: 
             return False
         timestamp_str, token_action_hash, signature = parts
         token_time = int(timestamp_str)
-        now = int(datetime.datetime.utcnow().timestamp())
+        now = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
         if now - token_time > 900 or token_time - now > 60:
             return False
 

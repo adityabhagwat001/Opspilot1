@@ -50,7 +50,7 @@ def verify_approval_token(tool_name: str, args: Dict[str, Any], approval_token: 
         
         # Check token expiration (e.g., 15 minutes)
         token_time = int(timestamp_str)
-        now = int(datetime.datetime.utcnow().timestamp())
+        now = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
         if now - token_time > 900 or token_time - now > 60:
             return False
 
@@ -121,7 +121,7 @@ async def get_operations_summary(workspace_id: str = "default-ops") -> Dict[str,
             "total_tasks": len(tasks),
             "active_tasks": len(pending_tasks),
             "system_status": "degraded" if critical_count > 0 else "healthy",
-            "last_checked": datetime.datetime.utcnow().isoformat() + "Z",
+            "last_checked": datetime.datetime.now(datetime.timezone.utc).isoformat() + "Z",
         }
 
 @mcp.tool()
@@ -317,8 +317,8 @@ async def create_operational_task(
         priority=priority,
         assignee=assignee,
         workspace_id=workspace_id,
-        created_at=datetime.datetime.utcnow(),
-        updated_at=datetime.datetime.utcnow()
+        created_at=datetime.datetime.now(datetime.timezone.utc),
+        updated_at=datetime.datetime.now(datetime.timezone.utc)
     )
 
     async with ops_db.session_factory() as session:
@@ -331,7 +331,7 @@ async def create_operational_task(
         "task_id": task_id,
         "title": title,
         "priority": priority,
-        "created_at": datetime.datetime.utcnow().isoformat() + "Z"
+        "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat() + "Z"
     }
 
 @mcp.tool()
@@ -381,7 +381,7 @@ async def update_operational_task(
             task.priority = priority
         if assignee:
             task.assignee = assignee
-        task.updated_at = datetime.datetime.utcnow()
+        task.updated_at = datetime.datetime.now(datetime.timezone.utc)
 
         await session.commit()
 
@@ -430,7 +430,7 @@ async def update_incident_status(
             return {"status": "ERROR", "error": f"Incident '{incident_id}' not found"}
 
         incident.status = status
-        incident.updated_at = datetime.datetime.utcnow()
+        incident.updated_at = datetime.datetime.now(datetime.timezone.utc)
         await session.commit()
 
     return {
@@ -438,7 +438,7 @@ async def update_incident_status(
         "action": "updated_incident_status",
         "incident_id": incident_id,
         "new_status": status,
-        "updated_at": datetime.datetime.utcnow().isoformat() + "Z"
+        "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat() + "Z"
     }
 
 if __name__ == "__main__":

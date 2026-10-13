@@ -79,7 +79,7 @@ async def send_message(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user)
 ):
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.timezone.utc)
 
     # 1. Resolve or create conversation
     conv_id = payload.conversation_id

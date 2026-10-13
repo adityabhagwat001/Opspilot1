@@ -14,6 +14,9 @@ from sqlalchemy import String, Text, DateTime, ForeignKey, select, update, inser
 # Default connection: can be overridden via OPS_DATABASE_URL or DATABASE_URL
 DEFAULT_DB_URL = os.getenv("OPS_DATABASE_URL", os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./operational_data.db"))
 
+def utc_now() -> datetime.datetime:
+    return datetime.datetime.now(datetime.timezone.utc)
+
 class Base(DeclarativeBase):
     pass
 
@@ -28,8 +31,8 @@ class OperationalIncident(Base):
     description: Mapped[str] = mapped_column(Text, nullable=False)
     assigned_to: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     workspace_id: Mapped[str] = mapped_column(String(50), default="default-ops", index=True)
-    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=datetime.datetime.utcnow)
-    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
 class OperationalTask(Base):
     __tablename__ = "operational_tasks"
@@ -42,8 +45,8 @@ class OperationalTask(Base):
     priority: Mapped[str] = mapped_column(String(20), nullable=False, default="p1")  # p0, p1, p2, p3
     assignee: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     workspace_id: Mapped[str] = mapped_column(String(50), default="default-ops", index=True)
-    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=datetime.datetime.utcnow)
-    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
 class DatabaseEntity(Base):
     __tablename__ = "system_entities"
@@ -84,8 +87,8 @@ class OperationsDatabase:
                 description="Token verification latency increased to 3500ms in us-east-1 causing cascading timeouts across API gateway.",
                 assigned_to="aditya.b@enterprise.internal",
                 workspace_id="default-ops",
-                created_at=datetime.datetime.utcnow() - datetime.timedelta(hours=3),
-                updated_at=datetime.datetime.utcnow() - datetime.timedelta(minutes=30),
+                created_at=utc_now() - datetime.timedelta(hours=3),
+                updated_at=utc_now() - datetime.timedelta(minutes=30),
             ),
             OperationalIncident(
                 id="INC-102",
@@ -96,8 +99,8 @@ class OperationsDatabase:
                 description="Intermittent 504 responses received when processing third-party webhook callbacks from Stripe provider.",
                 assigned_to="ops-team@enterprise.internal",
                 workspace_id="default-ops",
-                created_at=datetime.datetime.utcnow() - datetime.timedelta(hours=8),
-                updated_at=datetime.datetime.utcnow() - datetime.timedelta(hours=2),
+                created_at=utc_now() - datetime.timedelta(hours=8),
+                updated_at=utc_now() - datetime.timedelta(hours=2),
             ),
             OperationalIncident(
                 id="INC-103",
@@ -108,8 +111,8 @@ class OperationsDatabase:
                 description="Cache eviction policy triggered in secondary Redis node; eviction buffer size adjusted.",
                 assigned_to="infra-oncall@enterprise.internal",
                 workspace_id="default-ops",
-                created_at=datetime.datetime.utcnow() - datetime.timedelta(days=1),
-                updated_at=datetime.datetime.utcnow() - datetime.timedelta(hours=6),
+                created_at=utc_now() - datetime.timedelta(days=1),
+                updated_at=utc_now() - datetime.timedelta(hours=6),
             ),
         ]
         session.add_all(incidents)
