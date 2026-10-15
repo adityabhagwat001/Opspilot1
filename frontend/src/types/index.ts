@@ -111,10 +111,12 @@ export interface GitHubRepository {
 export interface GitHubEventItem {
   id: string;
   delivery_id: string;
-  repo_name: string;
+  repo_name?: string;
+  repo_full_name?: string;
   event_type: string;
   action: string;
-  actor: string;
+  actor?: string;
+  sender?: string;
   summary: string;
   created_at: string;
   payload?: any;
@@ -122,7 +124,8 @@ export interface GitHubEventItem {
 
 export interface WorkflowFailureItem {
   id: string;
-  repo_name: string;
+  repo_name?: string;
+  repo_full_name?: string;
   workflow_name: string;
   run_id: number;
   commit_sha?: string;
@@ -132,6 +135,8 @@ export interface WorkflowFailureItem {
   html_url?: string;
   failing_step?: string;
   error_snippet?: string;
+  error_log_snippet?: string;
+  analysis_summary?: string;
   root_cause?: string;
   suggested_fix?: string;
   status: 'detected' | 'analyzed' | 'fix_proposed' | 'fix_applied' | 'resolved';

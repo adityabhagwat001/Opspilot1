@@ -5,20 +5,16 @@ import {
   GitPullRequest, 
   AlertOctagon, 
   CheckCircle2, 
-  XCircle, 
   RefreshCw, 
   ExternalLink, 
   ShieldCheck, 
   Bot, 
   Activity, 
   Bell, 
-  Check, 
-  ChevronRight, 
   AlertTriangle,
   Play,
   Terminal,
   FileCode,
-  Layers,
   ArrowRight
 } from 'lucide-react';
 import { api } from '../services/api';
@@ -58,20 +54,41 @@ export const GitHubDevOpsPage: React.FC = () => {
       const [accRes, repoRes, failRes, propRes, eventRes, healthRes, notifRes] = await Promise.all([
         api.getGitHubAccount().catch(() => null),
         api.getGitHubRepositories().catch(() => ({ count: 0, repositories: [] })),
-        api.getGitHubFailures(30).catch(() => ({ count: 0, failures: [] })),
+        api.getGitHubFailures(30).catch(() => []),
         api.getGitHubProposals().catch(() => []),
-        api.getGitHubActivity(40).catch(() => ({ count: 0, events: [] })),
+        api.getGitHubActivity(40).catch(() => []),
         api.getGitHubHealth().catch(() => null),
         api.getNotifications(false).catch(() => ({ unread_count: 0, notifications: [] })),
       ]);
 
       if (accRes) setAccount(accRes);
-      if (repoRes) setRepositories(repoRes.repositories);
-      if (failRes) setFailures(failRes.failures);
-      if (propRes) setProposals(propRes);
-      if (eventRes) setEvents(eventRes.events);
+
+      const safeRepos = Array.isArray(repoRes) 
+        ? repoRes 
+        : (repoRes && Array.isArray((repoRes as any).repositories) ? (repoRes as any).repositories : []);
+      setRepositories(safeRepos);
+
+      const safeFailures = Array.isArray(failRes) 
+        ? failRes 
+        : (failRes && Array.isArray((failRes as any).failures) ? (failRes as any).failures : []);
+      setFailures(safeFailures);
+
+      const safeProposals = Array.isArray(propRes) 
+        ? propRes 
+        : (propRes && Array.isArray((propRes as any).proposals) ? (propRes as any).proposals : []);
+      setProposals(safeProposals);
+
+      const safeEvents = Array.isArray(eventRes) 
+        ? eventRes 
+        : (eventRes && Array.isArray((eventRes as any).events) ? (eventRes as any).events : []);
+      setEvents(safeEvents);
+
       if (healthRes) setHealth(healthRes);
-      if (notifRes) setNotifications(notifRes.notifications);
+
+      const safeNotifs = Array.isArray(notifRes) 
+        ? notifRes 
+        : (notifRes && Array.isArray((notifRes as any).notifications) ? (notifRes as any).notifications : []);
+      setNotifications(safeNotifs);
     } catch (err: any) {
       console.error('Failed to load GitHub DevOps telemetry:', err);
     } finally {
@@ -110,13 +127,13 @@ export const GitHubDevOpsPage: React.FC = () => {
   const handleToggleMonitoring = async (repo: GitHubRepository) => {
     const nextState = !repo.is_monitored;
     // Optimistic update
-    setRepositories(prev => prev.map(r => r.full_name === repo.full_name ? { ...r, is_monitored: nextState } : r));
+    setRepositories(prev => (prev || []).map(r => r.full_name === repo.full_name ? { ...r, is_monitored: nextState } : r));
     try {
       await api.toggleRepositoryMonitor(repo.full_name, nextState, repo.default_branch);
       await loadAllData(false);
     } catch (err: any) {
       // Revert on error
-      setRepositories(prev => prev.map(r => r.full_name === repo.full_name ? { ...r, is_monitored: !nextState } : r));
+      setRepositories(prev => (prev || []).map(r => r.full_name === repo.full_name ? { ...r, is_monitored: !nextState } : r));
       setStatusMessage({
         text: `Failed to update monitoring: ${err.response?.data?.detail || err.message}`,
         type: 'error'
@@ -133,8 +150,7 @@ export const GitHubDevOpsPage: React.FC = () => {
         type: 'success'
       });
       await loadAllData(false);
-      // Select the failure to expand details
-      const updatedFail = failures.find(f => f.id === failureId);
+      const updatedFail = (failures || []).find(f => f.id === failureId);
       if (updatedFail) {
         setSelectedFailure({
           ...updatedFail,
@@ -206,7 +222,7 @@ export const GitHubDevOpsPage: React.FC = () => {
   const handleMarkNotificationRead = async (notifId: string) => {
     try {
       await api.markNotificationRead(notifId);
-      setNotifications(prev => prev.map(n => n.id === notifId ? { ...n, is_read: true } : n));
+      setNotifications(prev => (prev || []).map(n => n.id === notifId ? { ...n, is_read: true } : n));
     } catch {
       // ignore
     }
@@ -215,7 +231,7 @@ export const GitHubDevOpsPage: React.FC = () => {
   const handleMarkAllRead = async () => {
     try {
       await api.markAllNotificationsRead();
-      setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
+      setNotifications(prev => (prev || []).map(n => ({ ...n, is_read: true })));
     } catch {
       // ignore
     }
@@ -232,8 +248,14 @@ export const GitHubDevOpsPage: React.FC = () => {
     );
   }
 
-  const activeFailuresCount = failures.filter(f => f.status === 'detected' || f.status === 'analyzed').length;
-  const unreadNotifsCount = notifications.filter(n => !n.is_read).length;
+  const safeFailures = failures || [];
+  const safeRepos = repositories || [];
+  const safeProposals = proposals || [];
+  const safeEvents = events || [];
+  const safeNotifications = notifications || [];
+
+  const activeFailuresCount = safeFailures.filter(f => f.status === 'detected' || f.status === 'analyzed').length;
+  const unreadNotifsCount = safeNotifications.filter(n => !n.is_read).length;
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
@@ -401,9 +423,9 @@ export const GitHubDevOpsPage: React.FC = () => {
           </div>
           <div className="flex items-baseline gap-2">
             <span className="text-3xl font-black text-white">
-              {repositories.filter(r => r.is_monitored).length}
+              {safeRepos.filter(r => r.is_monitored).length}
             </span>
-            <span className="text-xs text-slate-400">of {repositories.length} total</span>
+            <span className="text-xs text-slate-400">of {safeRepos.length} total</span>
           </div>
           <p className="text-[11px] text-slate-500 font-mono">
             Webhook listener active
@@ -417,7 +439,7 @@ export const GitHubDevOpsPage: React.FC = () => {
             <ShieldCheck className="w-4 h-4 text-amber-400" />
           </div>
           <div className="flex items-baseline gap-2">
-            <span className="text-3xl font-black text-white">{proposals.length}</span>
+            <span className="text-3xl font-black text-white">{safeProposals.length}</span>
             <span className="text-xs text-slate-400">generated</span>
           </div>
           <p className="text-[11px] text-slate-500 font-mono">
@@ -427,7 +449,7 @@ export const GitHubDevOpsPage: React.FC = () => {
       </div>
 
       {/* In-App Notifications Drawer / Alert Banner */}
-      {notifications.length > 0 && (
+      {safeNotifications.length > 0 && (
         <div className="glass-card p-4 rounded-2xl border border-slate-800 space-y-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -452,7 +474,7 @@ export const GitHubDevOpsPage: React.FC = () => {
           </div>
 
           <div className="divide-y divide-slate-800/80 max-h-36 overflow-y-auto pr-1">
-            {notifications.slice(0, 5).map(n => (
+            {safeNotifications.slice(0, 5).map(n => (
               <div 
                 key={n.id} 
                 className={`py-2 px-1 flex items-center justify-between gap-3 text-xs ${n.is_read ? 'opacity-60' : 'opacity-100 font-medium'}`}
@@ -508,9 +530,9 @@ export const GitHubDevOpsPage: React.FC = () => {
           >
             <ShieldCheck className="w-3.5 h-3.5" />
             <span>AI Fix Proposals</span>
-            {proposals.length > 0 && (
+            {safeProposals.length > 0 && (
               <span className="px-1.5 py-0.2 rounded-full bg-amber-500 text-slate-950 text-[10px]">
-                {proposals.length}
+                {safeProposals.length}
               </span>
             )}
           </button>
@@ -525,7 +547,7 @@ export const GitHubDevOpsPage: React.FC = () => {
             }`}
           >
             <GitBranch className="w-3.5 h-3.5" />
-            <span>Repositories ({repositories.length})</span>
+            <span>Repositories ({safeRepos.length})</span>
           </button>
 
           <button
@@ -538,7 +560,7 @@ export const GitHubDevOpsPage: React.FC = () => {
             }`}
           >
             <Activity className="w-3.5 h-3.5" />
-            <span>Live Activity ({events.length})</span>
+            <span>Live Activity ({safeEvents.length})</span>
           </button>
         </div>
 
@@ -555,7 +577,7 @@ export const GitHubDevOpsPage: React.FC = () => {
       {/* TAB 1: CI/CD FAILURES */}
       {activeTab === 'failures' && (
         <div className="space-y-4">
-          {failures.length === 0 ? (
+          {safeFailures.length === 0 ? (
             <div className="glass-panel p-12 text-center rounded-2xl border border-slate-800 space-y-3">
               <CheckCircle2 className="w-12 h-12 text-emerald-400 mx-auto" />
               <h3 className="text-base font-bold text-white">All Monitored Workflows Healthy</h3>
@@ -564,10 +586,11 @@ export const GitHubDevOpsPage: React.FC = () => {
               </p>
             </div>
           ) : (
-            failures.map(failure => {
-              const isSelected = selectedFailure?.id === failure.id;
+            safeFailures.map(failure => {
               const isAnalyzing = actionLoadingId === `analyze-${failure.id}`;
               const isProposing = actionLoadingId === `propose-${failure.id}`;
+              const repoDisplayName = failure.repo_full_name || failure.repo_name || 'monitored-repo';
+              const errorSnippet = failure.error_log_snippet || failure.error_snippet;
 
               return (
                 <div 
@@ -587,10 +610,10 @@ export const GitHubDevOpsPage: React.FC = () => {
                           failure.status === 'fix_proposed' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' :
                           'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                         }`}>
-                          {failure.status.replace('_', ' ')}
+                          {failure.status ? failure.status.replace('_', ' ') : 'detected'}
                         </span>
                         <span className="font-bold text-white text-base">
-                          {failure.workflow_name}
+                          {failure.workflow_name || 'Continuous Integration Pipeline'}
                         </span>
                         <span className="text-xs font-mono text-slate-400">
                           #{failure.run_id}
@@ -608,9 +631,9 @@ export const GitHubDevOpsPage: React.FC = () => {
                       </div>
 
                       <div className="flex flex-wrap items-center gap-4 text-xs font-mono text-slate-400">
-                        <span>Repository: <strong className="text-slate-200">{failure.repo_name}</strong></span>
-                        <span>Branch: <code className="text-purple-300">{failure.branch}</code></span>
-                        <span>Actor: <strong className="text-slate-200">{failure.sender}</strong></span>
+                        <span>Repository: <strong className="text-slate-200">{repoDisplayName}</strong></span>
+                        <span>Branch: <code className="text-purple-300">{failure.branch || 'main'}</code></span>
+                        <span>Actor: <strong className="text-slate-200">{failure.sender || 'github-actor'}</strong></span>
                         {failure.commit_sha && (
                           <span>Commit: <code className="text-slate-300">{failure.commit_sha.substring(0, 7)}</code></span>
                         )}
@@ -623,13 +646,13 @@ export const GitHubDevOpsPage: React.FC = () => {
                       )}
 
                       {/* Error log snippet */}
-                      {failure.error_snippet && (
+                      {errorSnippet && (
                         <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800 font-mono text-xs text-rose-300/90 overflow-x-auto leading-relaxed">
                           <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1 flex items-center gap-1">
                             <Terminal className="w-3 h-3 text-rose-400" />
                             Failing Step: {failure.failing_step || 'Verification'}
                           </div>
-                          <pre>{failure.error_snippet}</pre>
+                          <pre>{errorSnippet}</pre>
                         </div>
                       )}
 
@@ -683,7 +706,7 @@ export const GitHubDevOpsPage: React.FC = () => {
       {/* TAB 2: AI FIX PROPOSALS */}
       {activeTab === 'proposals' && (
         <div className="space-y-6">
-          {proposals.length === 0 ? (
+          {safeProposals.length === 0 ? (
             <div className="glass-panel p-12 text-center rounded-2xl border border-slate-800 space-y-3">
               <ShieldCheck className="w-12 h-12 text-amber-400 mx-auto" />
               <h3 className="text-base font-bold text-white">No Fix Proposals Pending</h3>
@@ -692,7 +715,7 @@ export const GitHubDevOpsPage: React.FC = () => {
               </p>
             </div>
           ) : (
-            proposals.map(proposal => {
+            safeProposals.map(proposal => {
               const isExecuting = actionLoadingId === `exec-${proposal.id}`;
 
               return (
@@ -813,13 +836,13 @@ export const GitHubDevOpsPage: React.FC = () => {
         <div className="space-y-4">
           <div className="flex items-center justify-between text-xs text-slate-400">
             <p>Select which authorized repositories OpsPilot should actively monitor for webhook activity and CI/CD events.</p>
-            <span className="font-mono">{repositories.filter(r => r.is_monitored).length} of {repositories.length} monitored</span>
+            <span className="font-mono">{safeRepos.filter(r => r.is_monitored).length} of {safeRepos.length} monitored</span>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {repositories.map(repo => (
+            {safeRepos.map(repo => (
               <div 
-                key={repo.full_name} 
+                key={repo.full_name || repo.name} 
                 className={`glass-panel p-5 rounded-2xl border transition-all ${
                   repo.is_monitored ? 'border-purple-500/30' : 'border-slate-800 opacity-70'
                 }`}
@@ -841,7 +864,7 @@ export const GitHubDevOpsPage: React.FC = () => {
                     <input 
                       type="checkbox" 
                       className="sr-only peer"
-                      checked={repo.is_monitored}
+                      checked={Boolean(repo.is_monitored)}
                       onChange={() => handleToggleMonitoring(repo)}
                     />
                     <div className="w-9 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"></div>
@@ -853,7 +876,7 @@ export const GitHubDevOpsPage: React.FC = () => {
                 </p>
 
                 <div className="flex items-center justify-between text-xs font-mono text-slate-500 mt-4 pt-3 border-t border-slate-800">
-                  <span className="text-purple-300">branch: {repo.default_branch}</span>
+                  <span className="text-purple-300">branch: {repo.default_branch || 'main'}</span>
                   <span className="text-emerald-400">{repo.health_score ?? 100}% Health</span>
                 </div>
               </div>
@@ -872,37 +895,43 @@ export const GitHubDevOpsPage: React.FC = () => {
             </span>
           </div>
 
-          {events.length === 0 ? (
+          {safeEvents.length === 0 ? (
             <div className="py-8 text-center text-slate-500 text-xs font-mono">
               No webhook events ingested yet. Trigger a commit or pull request to view real-time events.
             </div>
           ) : (
             <div className="divide-y divide-slate-800 max-h-[500px] overflow-y-auto pr-2">
-              {events.map(ev => (
-                <div key={ev.id} className="py-3 flex items-start justify-between gap-4 text-xs">
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <span className={`text-[10px] font-mono uppercase font-bold px-2 py-0.5 rounded ${
-                        ev.event_type === 'workflow_run' ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30' :
-                        ev.event_type === 'push' ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30' :
-                        ev.event_type === 'pull_request' ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' :
-                        'bg-slate-800 text-slate-300'
-                      }`}>
-                        {ev.event_type}
-                      </span>
-                      <span className="font-semibold text-white">{ev.summary}</span>
+              {safeEvents.map(ev => {
+                const deliveryId = ev.delivery_id ? ev.delivery_id.substring(0, 10) : 'webhook';
+                const actorName = ev.sender || ev.actor || 'system';
+                const repoName = ev.repo_full_name || ev.repo_name || 'monitored-repo';
+
+                return (
+                  <div key={ev.id || deliveryId} className="py-3 flex items-start justify-between gap-4 text-xs">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className={`text-[10px] font-mono uppercase font-bold px-2 py-0.5 rounded ${
+                          ev.event_type === 'workflow_run' ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30' :
+                          ev.event_type === 'push' ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30' :
+                          ev.event_type === 'pull_request' ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' :
+                          'bg-slate-800 text-slate-300'
+                        }`}>
+                          {ev.event_type}
+                        </span>
+                        <span className="font-semibold text-white">{ev.summary}</span>
+                      </div>
+                      <div className="flex items-center gap-3 text-[11px] font-mono text-slate-500">
+                        <span>repo: {repoName}</span>
+                        <span>actor: {actorName}</span>
+                        <span>delivery: {deliveryId}...</span>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-3 text-[11px] font-mono text-slate-500">
-                      <span>repo: {ev.repo_name}</span>
-                      <span>actor: {ev.actor}</span>
-                      <span>delivery: {ev.delivery_id.substring(0, 10)}...</span>
-                    </div>
+                    <span className="text-[11px] font-mono text-slate-500 shrink-0">
+                      {ev.created_at ? new Date(ev.created_at).toLocaleTimeString() : ''}
+                    </span>
                   </div>
-                  <span className="text-[11px] font-mono text-slate-500 shrink-0">
-                    {ev.created_at ? new Date(ev.created_at).toLocaleTimeString() : ''}
-                  </span>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

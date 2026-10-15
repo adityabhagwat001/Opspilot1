@@ -8,6 +8,7 @@ import { IntegrationsPage } from './pages/IntegrationsPage';
 import { GitHubDevOpsPage } from './pages/GitHubDevOpsPage';
 import { AuditPage } from './pages/AuditPage';
 import { LoginPage } from './pages/LoginPage';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { api } from './services/api';
 import { User } from './types';
 
@@ -101,27 +102,29 @@ export const App: React.FC = () => {
         )}
 
         <main className="flex-1">
-          <Routes>
-            <Route
-              path="/login"
-              element={
-                user ? <Navigate to="/" replace /> : <LoginPage onLoginSuccess={handleLoginSuccess} />
-              }
-            />
-            {user ? (
-              <>
-                <Route path="/" element={<DashboardPage />} />
-                <Route path="/chat" element={<ChatPage />} />
-                <Route path="/approvals" element={<ApprovalsPage />} />
-                <Route path="/github" element={<GitHubDevOpsPage />} />
-                <Route path="/integrations" element={<IntegrationsPage />} />
-                <Route path="/audit" element={<AuditPage />} />
-                <Route path="*" element={<Navigate to="/" replace />} />
-              </>
-            ) : (
-              <Route path="*" element={<Navigate to="/login" replace />} />
-            )}
-          </Routes>
+          <ErrorBoundary>
+            <Routes>
+              <Route
+                path="/login"
+                element={
+                  user ? <Navigate to="/" replace /> : <LoginPage onLoginSuccess={handleLoginSuccess} />
+                }
+              />
+              {user ? (
+                <>
+                  <Route path="/" element={<DashboardPage />} />
+                  <Route path="/chat" element={<ChatPage />} />
+                  <Route path="/approvals" element={<ApprovalsPage />} />
+                  <Route path="/github" element={<GitHubDevOpsPage />} />
+                  <Route path="/integrations" element={<IntegrationsPage />} />
+                  <Route path="/audit" element={<AuditPage />} />
+                  <Route path="*" element={<Navigate to="/" replace />} />
+                </>
+              ) : (
+                <Route path="*" element={<Navigate to="/login" replace />} />
+              )}
+            </Routes>
+          </ErrorBoundary>
         </main>
       </div>
     </Router>

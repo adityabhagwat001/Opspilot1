@@ -135,21 +135,21 @@ export const api = {
   getGitHubActivity: async (
     limit = 30,
     repoName?: string
-  ): Promise<{ count: number; events: GitHubEventItem[] }> => {
+  ): Promise<GitHubEventItem[]> => {
     const res = await apiClient.get('/github/activity', {
       params: { limit, ...(repoName ? { repo_name: repoName } : {}) },
     });
-    return res.data;
+    return Array.isArray(res.data) ? res.data : (res.data?.events || []);
   },
 
   getGitHubFailures: async (
     limit = 20,
     status?: string
-  ): Promise<{ count: number; failures: WorkflowFailureItem[] }> => {
+  ): Promise<WorkflowFailureItem[]> => {
     const res = await apiClient.get('/github/failures', {
       params: { limit, ...(status ? { status } : {}) },
     });
-    return res.data;
+    return Array.isArray(res.data) ? res.data : (res.data?.failures || []);
   },
 
   getGitHubFailureDetail: async (failureId: string): Promise<WorkflowFailureItem> => {
