@@ -203,7 +203,11 @@ async def synthesize_with_llm(
                 elif groq_key and not openai_key:
                     api_url = "https://api.groq.com/openai/v1/chat/completions"
                     auth_header = f"Bearer {groq_key}"
-                    model = settings.LLM_MODEL if "llama" in (settings.LLM_MODEL or "") else "llama-3.3-70b-versatile"
+                    user_model = (settings.LLM_MODEL or "").strip()
+                    if user_model and user_model not in ("gpt-4o", "mock", "openai"):
+                        model = user_model
+                    else:
+                        model = "openai/gpt-oss-120b"
                 else:
                     api_url = "https://api.openai.com/v1/chat/completions"
                     auth_header = f"Bearer {openai_key}"
