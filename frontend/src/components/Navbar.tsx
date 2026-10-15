@@ -7,8 +7,7 @@ import {
   Blocks, 
   ScrollText, 
   LogOut, 
-  Terminal,
-  Activity
+  Terminal
 } from 'lucide-react';
 import { User } from '../types';
 

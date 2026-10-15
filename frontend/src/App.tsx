@@ -15,48 +15,59 @@ export const App: React.FC = () => {
   const [pendingApprovalsCount, setPendingApprovalsCount] = useState<number>(0);
   const [loading, setLoading] = useState<boolean>(true);
 
-  const fetchSession = async () => {
-    const token = localStorage.getItem('opspilot_token');
-    if (!token) {
-      setUser(null);
-      setLoading(false);
-      return;
-    }
-
-    try {
-      const u = await api.getMe();
-      setUser(u);
-    } catch {
-      localStorage.removeItem('opspilot_token');
-      setUser(null);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchPendingApprovals = async () => {
-    if (!localStorage.getItem('opspilot_token')) {
-      setPendingApprovalsCount(0);
-      return;
-    }
-    try {
-      const apps = await api.getApprovals('pending');
-      setPendingApprovalsCount(apps.length);
-    } catch {
-      // ignore
-    }
-  };
-
   useEffect(() => {
-    fetchSession();
+    let isMounted = true;
+    const initSession = async () => {
+      const token = localStorage.getItem('opspilot_token');
+      if (!token) {
+        if (isMounted) {
+          setUser(null);
+          setLoading(false);
+        }
+        return;
+      }
+
+      try {
+        const u = await api.getMe();
+        if (isMounted) setUser(u);
+      } catch {
+        localStorage.removeItem('opspilot_token');
+        if (isMounted) setUser(null);
+      } finally {
+        if (isMounted) setLoading(false);
+      }
+    };
+
+    void initSession();
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   useEffect(() => {
-    if (user) {
-      fetchPendingApprovals();
-      const interval = setInterval(fetchPendingApprovals, 10000);
-      return () => clearInterval(interval);
-    }
+    if (!user) return;
+    let isMounted = true;
+    const pollPending = async () => {
+      if (!localStorage.getItem('opspilot_token')) {
+        if (isMounted) setPendingApprovalsCount(0);
+        return;
+      }
+      try {
+        const apps = await api.getApprovals('pending');
+        if (isMounted) setPendingApprovalsCount(apps.length);
+      } catch {
+        // ignore
+      }
+    };
+
+    void pollPending();
+    const interval = setInterval(() => {
+      void pollPending();
+    }, 10000);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
   }, [user]);
 
   const handleLogout = () => {
@@ -67,7 +78,6 @@ export const App: React.FC = () => {
 
   const handleLoginSuccess = (loggedInUser: User) => {
     setUser(loggedInUser);
-    fetchPendingApprovals();
   };
 
   if (loading) {

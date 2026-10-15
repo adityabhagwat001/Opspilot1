@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Terminal, Lock, Mail, ArrowRight, Loader2, ShieldCheck } from 'lucide-react';
+import { Terminal, Lock, Mail, ArrowRight, Loader2 } from 'lucide-react';
 import { api } from '../services/api';
 import { User } from '../types';
 
@@ -26,7 +26,15 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
       onLoginSuccess(data.user, data.access_token);
       navigate('/');
     } catch (err: any) {
-      setError(err?.response?.data?.detail || 'Authentication failed. Please check credentials.');
+      if (!err?.response) {
+        setError('Backend server is offline. Please start the backend server on http://localhost:8000.');
+      } else if (err?.response?.status >= 500 || typeof err?.response?.data === 'string' || err?.response?.status === 502 || err?.response?.status === 504) {
+        setError('Backend server is not running on port 8000. Please launch the backend terminal.');
+      } else if (err?.response?.status === 401) {
+        setError(err?.response?.data?.detail || 'Incorrect email or password. Please use quick demo buttons below.');
+      } else {
+        setError(err?.response?.data?.detail || 'Authentication failed. Please verify credentials.');
+      }
     } finally {
       setIsLoading(false);
     }

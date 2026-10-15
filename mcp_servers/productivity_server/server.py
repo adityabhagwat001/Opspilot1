@@ -33,6 +33,7 @@ mcp = FastMCP("opspilot-productivity-server")
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 DEFAULT_DB_FILE = os.path.join(PROJECT_ROOT, "operational_data.db").replace("\\", "/")
 MAIL_DB_URL = os.getenv("OPS_DATABASE_URL", f"sqlite+aiosqlite:///{DEFAULT_DB_FILE}")
+APPROVAL_SECRET = os.getenv("OPSPILOT_APPROVAL_SECRET", "opspilot_trusted_approval_boundary_secret_key_32chars")
 
 def utc_now() -> datetime.datetime:
     return datetime.datetime.now(datetime.timezone.utc)
@@ -678,8 +679,8 @@ async def create_calendar_event(
         "title": title,
         "start_time": start_time,
         "end_time": end_time,
-        "attendees": attendees or [],
-        "description": description or "",
+        "attendees": attendees if attendees is not None else [],
+        "description": description,
         "calendar_id": calendar_id
     }
 

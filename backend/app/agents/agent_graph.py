@@ -275,13 +275,29 @@ async def plan_actions_node(state: OpsAgentState) -> Dict[str, Any]:
             })
 
     # -------------------------------------------------------------------------
-    # SCENARIO 2 & 3: GITHUB ISSUES, PRS & INCIDENT TICKET PROPOSALS
+    # SCENARIO 2 & 3: GITHUB REPOSITORIES, ISSUES, PRS & TICKET PROPOSALS
     # -------------------------------------------------------------------------
     if "github" in state["target_systems"]:
-        owner = settings.GITHUB_DEFAULT_OWNER or "enterprise-ops"
-        repo = settings.GITHUB_DEFAULT_REPO or "auth-service"
+        owner = os.getenv("GITHUB_DEFAULT_OWNER") or settings.GITHUB_DEFAULT_OWNER or "enterprise-ops"
+        repo = os.getenv("GITHUB_DEFAULT_REPO") or settings.GITHUB_DEFAULT_REPO or "auth-service"
 
-        if "issue" in req and any(k in req for k in ["highest priority", "priority", "most critical", "rank"]):
+        # Check if user mentioned an explicit owner/repo (e.g. adityabhagwat001/SafeHer or SafeHer)
+        slug_match = re.search(r"\b([a-zA-Z0-9_\-]+)/([a-zA-Z0-9_\-]+)\b", state["user_request"])
+        if slug_match and slug_match.group(1).lower() not in ("http", "https"):
+            owner = slug_match.group(1)
+            repo = slug_match.group(2)
+        elif settings.GITHUB_DEFAULT_REPO and settings.GITHUB_DEFAULT_REPO.lower() in req:
+            repo = settings.GITHUB_DEFAULT_REPO
+
+        if any(k in req for k in ["repository", "repositories", "repos", "repo"]) and any(k in req for k in ["list", "show", "find", "get", "my", "account", "all"]):
+            planned.append({
+                "tool": "list_repositories",
+                "system": "github",
+                "args": {"per_page": 10},
+                "is_write": False,
+                "description": "List repositories from authenticated GitHub account"
+            })
+        elif "issue" in req and any(k in req for k in ["highest priority", "priority", "most critical", "rank"]):
             planned.append({
                 "tool": "list_issues",
                 "system": "github",
@@ -317,19 +333,23 @@ async def plan_actions_node(state: OpsAgentState) -> Dict[str, Any]:
                 f"**Action Plan:** Investigate root cause and apply connection pool scaling/timeout fixes."
             )
             issue_labels = ["critical", "incident", "database", inc_info["service"]]
+            target_repo = repo
+            if inc_info and inc_info.get("service") and not (settings.GITHUB_DEFAULT_REPO and settings.GITHUB_DEFAULT_REPO != "auth-service"):
+                target_repo = inc_info.get("service")
             planned.append({
                 "tool": "create_issue",
                 "system": "github",
                 "args": {
                     "owner": owner,
-                    "repo": inc_info.get("service") or repo,
+                    "repo": target_repo,
                     "title": issue_title,
                     "body": issue_body,
                     "labels": issue_labels
                 },
                 "is_write": True,
-                "summary": f"Create GitHub issue '{issue_title}' in '{owner}/{inc_info.get('service') or repo}'"
+                "summary": f"Create GitHub issue '{issue_title}' in '{owner}/{target_repo}'"
             })
+
 
     # -------------------------------------------------------------------------
     # SCENARIO 4 & 5: EMAIL SEARCH, UNREAD, LOCAL COMPOSITION & SEND
@@ -519,7 +539,7 @@ async def generate_response_node(state: OpsAgentState) -> Dict[str, Any]:
     lines = []
 
     if tool_results:
-        lines.append("### Live Operational Findings (FastMCP Grounded Facts):")
+        lines.append("### Live Operational Findings")
         for tr in tool_results:
             tool = tr["tool"]
             raw_res = tr["result"]
@@ -530,30 +550,41 @@ async def generate_response_node(state: OpsAgentState) -> Dict[str, Any]:
             if tool == "list_incidents":
                 incidents = res.get("incidents", []) if isinstance(res, dict) else (res if isinstance(res, list) else [])
                 count = res.get("count", len(incidents)) if isinstance(res, dict) else len(incidents)
-                lines.append(f"\n**PostgreSQL Incidents ({count} matching records found):**")
+                lines.append(f"\n#### 🚨 Operational Incidents ({count} matching records):\n")
                 for inc in incidents:
+                    sev = inc.get('severity', '').upper()
                     lines.append(
-                        f"- **[{inc.get('id')}]** `{inc.get('severity', '').upper()}` — **{inc.get('title')}**\n"
-                        f"  *Status:* `{inc.get('status')}` | *Service:* `{inc.get('service')}` | *Opened:* {inc.get('created_at')}"
+                        f"- **[{inc.get('id')}]** `{sev}` — **{inc.get('title')}**\n"
+                        f"  *Status:* `{inc.get('status')}` · *Service:* `{inc.get('service')}` · *Opened:* {inc.get('created_at')}"
                     )
             elif tool == "get_operations_summary":
-                lines.append("\n**System Operations Overview:**")
-                lines.append(f"- Platform Status: `{res.get('system_status', 'HEALTHY').upper()}`")
-                lines.append(f"- Total Incidents: {res.get('total_incidents', 0)} ({res.get('critical_incidents', 0)} Critical)")
-                lines.append(f"- Active Remediation Tasks: {res.get('active_tasks', 0)}")
+                lines.append("\n#### 📊 System Operations Overview:\n")
+                lines.append(f"- **Platform Status:** `{res.get('system_status', 'HEALTHY').upper()}`")
+                lines.append(f"- **Total Incidents:** {res.get('total_incidents', 0)} ({res.get('critical_incidents', 0)} Critical)")
+                lines.append(f"- **Active Remediation Tasks:** {res.get('active_tasks', 0)}")
+            elif tool == "list_repositories":
+                repos = res.get("repositories", []) if isinstance(res, dict) else (res if isinstance(res, list) else [])
+                lines.append(f"\n#### 📂 GitHub Repositories ({len(repos)} found):\n")
+                for r in repos:
+                    vis = "Private" if r.get("private") else "Public"
+                    desc = f" — {r.get('description')}" if r.get("description") else ""
+                    open_cnt = r.get('open_issues_count', 0)
+                    issues_badge = f"`{open_cnt} open issues`" if open_cnt > 0 else "`0 issues`"
+                    lines.append(f"- [{r.get('full_name') or r.get('name')}]({r.get('html_url')}) · `{vis}` · {issues_badge}{desc}")
             elif tool == "list_issues":
                 issues = res.get("issues", []) if isinstance(res, dict) else []
-                lines.append(f"\n**GitHub Issues ({len(issues)} retrieved from {res.get('owner', 'enterprise-ops')}/{res.get('repo', 'auth-service')}):**")
+                lines.append(f"\n#### 📋 GitHub Issues ({len(issues)} retrieved from `{res.get('owner', 'enterprise-ops')}/{res.get('repo', 'auth-service')}`):\n")
                 for iss in issues:
                     labels = ", ".join(iss.get("labels", [])) or "none"
-                    p_rank = f" — *Rank:* {iss.get('priority_rank')}" if iss.get("priority_rank") else ""
-                    lines.append(f"- **Issue #{iss.get('number')}**: [{iss.get('title')}]({iss.get('html_url')}) (Labels: `{labels}`){p_rank}")
+                    p_rank = f" · *Priority Rank:* {iss.get('priority_rank')}" if iss.get("priority_rank") else ""
+                    lines.append(f"- **#{iss.get('number')}** [{iss.get('title')}]({iss.get('html_url')}) · `labels: {labels}`{p_rank}")
             elif tool in ("search_messages", "get_unread_messages"):
                 msgs = res.get("matches", []) or res.get("messages", [])
-                lines.append(f"\n**Operational Emails ({len(msgs)} matching):**")
+                lines.append(f"\n#### ✉️ Operational Emails ({len(msgs)} messages found):\n")
                 for m in msgs:
-                    lines.append(f"- **[{m.get('id')}]** **From:** `{m.get('sender')}` | **Subject:** {m.get('subject')}")
-                    lines.append(f"  *Preview:* {m.get('snippet')}")
+                    lines.append(f"- **[{m.get('id')}]** **From:** `{m.get('sender')}` · **Subject:** {m.get('subject')}")
+                    if m.get('snippet'):
+                        lines.append(f"  > {m.get('snippet')}")
             elif tool == "get_message":
                 lines.append(f"\n**Detailed Email View ({res.get('id')}):**")
                 lines.append(f"- **From:** `{res.get('sender')}` | **To:** `{res.get('recipient')}`")

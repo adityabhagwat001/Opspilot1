@@ -1,65 +1,40 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useLocation } from 'react-router-dom';
 import { 
   Send, 
   Bot, 
   User as UserIcon, 
-  Terminal, 
   Sparkles, 
   Loader2, 
-  AlertCircle,
-  Database,
-  GitBranch,
-  Mail,
-  Calendar,
-  Layers,
-  ChevronDown,
-  ChevronUp
+  Database, 
+  GitBranch, 
+  Mail, 
+  Calendar, 
+  Layers 
 } from 'lucide-react';
 import { api } from '../services/api';
 import { ApprovalCard } from '../components/ApprovalCard';
-import { ChatMessage, ApprovalRequest } from '../types';
+import { MarkdownMessage } from '../components/MarkdownMessage';
+import { ChatMessage } from '../types';
+
+const INITIAL_WELCOME: ChatMessage = {
+  id: 'welcome',
+  role: 'assistant',
+  content: "Hello, I am **OpsPilot**, your autonomous enterprise operations assistant connected through live FastMCP servers.\n\nI can retrieve authorized data from PostgreSQL, GitHub, email, and calendar, reason across multiple systems, and execute approved actions. Every write strictly requires your approval before touching any system.",
+  timestamp: new Date().toISOString()
+};
 
 export const ChatPage: React.FC = () => {
   const location = useLocation();
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([INITIAL_WELCOME]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [activeStep, setActiveStep] = useState<string>('');
   const [conversationId, setConversationId] = useState<string | undefined>(undefined);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const handledPromptRef = useRef<string | null>(null);
 
-  // Auto-fill prompt if navigated from Dashboard
-  useEffect(() => {
-    if (location.state && (location.state as any).initialPrompt) {
-      const prompt = (location.state as any).initialPrompt;
-      setInput(prompt);
-      // Auto send
-      setTimeout(() => {
-        handleSend(prompt);
-      }, 300);
-    } else if (messages.length === 0) {
-      // Welcome message
-      setMessages([
-        {
-          id: 'welcome',
-          role: 'assistant',
-          content: "Hello, I am **OpsPilot**, your autonomous enterprise operations assistant connected through live FastMCP servers.\n\nI can retrieve authorized data from PostgreSQL, GitHub, email, and calendar, reason across multiple systems, and execute approved actions. Every write strictly requires your approval before touching any system.",
-          timestamp: new Date().toISOString()
-        }
-      ]);
-    }
-  }, [location.state]);
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages, activeStep]);
-
-  const handleSend = async (customText?: string) => {
+  const handleSend = useCallback(async (customText?: string) => {
     const textToSend = customText || input;
     if (!textToSend.trim() || isLoading) return;
 
@@ -103,7 +78,29 @@ export const ChatPage: React.FC = () => {
       setIsLoading(false);
       setActiveStep('');
     }
+  }, [input, isLoading, conversationId]);
+
+  // Auto-fill prompt if navigated from Dashboard
+  useEffect(() => {
+    const prompt = (location.state as any)?.initialPrompt;
+    if (prompt && handledPromptRef.current !== prompt) {
+      handledPromptRef.current = prompt;
+      setInput(prompt);
+      const timer = setTimeout(() => {
+        void handleSend(prompt);
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [location.state, handleSend]);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages, activeStep]);
+
 
   const handleInlineApprove = async (approvalId: string) => {
     try {
@@ -210,9 +207,13 @@ export const ChatPage: React.FC = () => {
                 : 'glass-panel p-5 rounded-2xl rounded-tl-none border border-slate-800 text-sm text-slate-200'
             }`}>
               {/* Message Content */}
-              <div className="whitespace-pre-wrap leading-relaxed">
-                {m.content}
-              </div>
+              {m.role === 'user' ? (
+                <div className="whitespace-pre-wrap leading-relaxed">
+                  {m.content}
+                </div>
+              ) : (
+                <MarkdownMessage content={m.content} />
+              )}
 
               {/* Collapsible Tool Invocations Badge */}
               {m.tool_calls && m.tool_calls.length > 0 && (

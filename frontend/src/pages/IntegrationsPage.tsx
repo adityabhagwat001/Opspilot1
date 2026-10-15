@@ -4,16 +4,21 @@ import {
   Database, 
   GitBranch, 
   Mail, 
-  Calendar, 
-  CheckCircle2, 
-  ShieldCheck, 
-  Key, 
-  Cpu, 
-  ExternalLink,
-  Code2
+  Calendar 
 } from 'lucide-react';
 import { api } from '../services/api';
 import { Integration } from '../types';
+
+const fetchClientTools = async () => {
+  try {
+    const tools = await fetch('/api/integrations/tools', {
+      headers: { Authorization: `Bearer ${localStorage.getItem('opspilot_token') || ''}` }
+    }).then(r => r.json());
+    return tools.tools || [];
+  } catch {
+    return [];
+  }
+};
 
 export const IntegrationsPage: React.FC = () => {
   const [integrations, setIntegrations] = useState<Integration[]>([]);
@@ -22,36 +27,31 @@ export const IntegrationsPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let isMounted = true;
     const fetchData = async () => {
       try {
         const [integRes, toolsRes] = await Promise.all([
           api.getIntegrations(),
-          apiClientTools()
+          fetchClientTools()
         ]);
-        setIntegrations(integRes.integrations);
-        setTotalTools(integRes.total_tools);
-        setToolsList(toolsRes);
+        if (isMounted) {
+          setIntegrations(integRes.integrations);
+          setTotalTools(integRes.total_tools);
+          setToolsList(toolsRes);
+        }
       } catch (err) {
         console.error('Failed to load integrations:', err);
       } finally {
-        setLoading(false);
+        if (isMounted) {
+          setLoading(false);
+        }
       }
     };
     fetchData();
+    return () => {
+      isMounted = false;
+    };
   }, []);
-
-  const apiClientTools = async () => {
-    try {
-      const res = await api.getDashboardStats();
-      // fetch tools from /api/integrations/tools
-      const tools = await fetch('/api/integrations/tools', {
-        headers: { Authorization: `Bearer ${localStorage.getItem('opspilot_token') || ''}` }
-      }).then(r => r.json());
-      return tools.tools || [];
-    } catch {
-      return [];
-    }
-  };
 
   const getIcon = (provider: string) => {
     switch (provider.toLowerCase()) {
@@ -62,6 +62,17 @@ export const IntegrationsPage: React.FC = () => {
       default: return <Blocks className="w-6 h-6 text-emerald-400" />;
     }
   };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <div className="text-center">
+          <div className="w-10 h-10 border-4 border-emerald-500/20 border-t-emerald-400 rounded-full animate-spin mx-auto mb-3"></div>
+          <p className="text-sm text-slate-400 font-mono">Discovering MCP Integrations & Tool Registry...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
@@ -121,7 +132,7 @@ export const IntegrationsPage: React.FC = () => {
       <div className="glass-panel p-6 rounded-2xl border border-slate-800 space-y-4">
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-base font-bold text-white">Full FastMCP Tool Registry ({toolsList.length || 33} Tools)</h3>
+            <h3 className="text-base font-bold text-white">Full FastMCP Tool Registry ({totalTools || toolsList.length || 33} Tools)</h3>
             <p className="text-xs text-slate-400 mt-0.5">
               Categorized into safe read operations and protected write operations.
             </p>

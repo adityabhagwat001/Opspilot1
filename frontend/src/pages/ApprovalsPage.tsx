@@ -1,17 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  ShieldCheck, 
-  ShieldAlert, 
-  CheckCircle2, 
-  XCircle, 
-  Filter, 
-  RefreshCw, 
-  Layers,
-  Database,
-  GitBranch,
-  Mail,
-  Calendar
-} from 'lucide-react';
+import { ShieldCheck, RefreshCw } from 'lucide-react';
 import { api } from '../services/api';
 import { ApprovalCard } from '../components/ApprovalCard';
 import { ApprovalRequest } from '../types';
@@ -35,15 +23,31 @@ export const ApprovalsPage: React.FC = () => {
   };
 
   useEffect(() => {
-    fetchApprovals();
+    let isMounted = true;
+    const loadData = async () => {
+      try {
+        const data = await api.getApprovals();
+        if (isMounted) setApprovals(data);
+      } catch (err) {
+        console.error('Failed to fetch approvals:', err);
+      } finally {
+        if (isMounted) setLoading(false);
+      }
+    };
+    void loadData();
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const handleApprove = async (id: string) => {
+    setLoading(true);
     await api.approveAction(id);
     await fetchApprovals();
   };
 
   const handleReject = async (id: string, reason?: string) => {
+    setLoading(true);
     await api.rejectAction(id, reason);
     await fetchApprovals();
   };

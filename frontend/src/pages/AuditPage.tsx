@@ -1,14 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  ScrollText, 
   Search, 
-  Filter, 
-  Clock, 
-  ShieldCheck, 
-  AlertTriangle,
-  ChevronDown,
-  ChevronUp,
-  RefreshCw
+  ChevronDown, 
+  ChevronUp, 
+  RefreshCw 
 } from 'lucide-react';
 import { api } from '../services/api';
 import { AuditLog } from '../types';
@@ -33,7 +28,21 @@ export const AuditPage: React.FC = () => {
   };
 
   useEffect(() => {
-    fetchLogs();
+    let isMounted = true;
+    const loadLogs = async () => {
+      try {
+        const data = await api.getAuditLogs(systemFilter === 'all' ? undefined : systemFilter);
+        if (isMounted) setLogs(data);
+      } catch (err) {
+        console.error('Failed to load audit logs:', err);
+      } finally {
+        if (isMounted) setLoading(false);
+      }
+    };
+    void loadLogs();
+    return () => {
+      isMounted = false;
+    };
   }, [systemFilter]);
 
   const filteredLogs = logs.filter((l) => {

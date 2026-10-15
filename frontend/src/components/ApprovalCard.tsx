@@ -3,7 +3,6 @@ import {
   ShieldAlert, 
   CheckCircle2, 
   XCircle, 
-  Clock, 
   Hash, 
   AlertTriangle,
   Database,
@@ -74,7 +73,9 @@ export const ApprovalCard: React.FC<ApprovalCardProps> = ({
         ? 'border-amber-500/40 bg-gradient-to-b from-amber-500/10 to-slate-900/90 shadow-lg shadow-amber-500/5' 
         : isApproved
         ? 'border-emerald-500/30 bg-slate-900/60'
-        : 'border-rose-500/30 bg-slate-900/60'
+        : isRejected
+        ? 'border-rose-500/30 bg-slate-900/60'
+        : 'border-slate-800 bg-slate-900/60'
     } p-5`}>
       {/* Header */}
       <div className="flex items-start justify-between gap-4">

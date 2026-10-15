@@ -14,6 +14,10 @@ import datetime
 from typing import Optional, Dict, Any, List
 import httpx
 from fastmcp import FastMCP
+from dotenv import load_dotenv
+
+load_dotenv()
+
 
 # Add parent directory to path so imports work seamlessly
 current_dir = os.path.dirname(os.path.abspath(__file__))
