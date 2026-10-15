@@ -1,5 +1,18 @@
 import axios from 'axios';
-import { DashboardStats, ApprovalRequest, Integration, AuditLog, User } from '../types';
+import { 
+  DashboardStats, 
+  ApprovalRequest, 
+  Integration, 
+  AuditLog, 
+  User,
+  GitHubAccount,
+  GitHubRepository,
+  GitHubEventItem,
+  WorkflowFailureItem,
+  FixProposalItem,
+  GitHubHealth,
+  GitHubNotificationItem
+} from '../types';
 
 const API_BASE = '/api';
 
@@ -92,6 +105,136 @@ export const api = {
         action_filter: actionFilter,
       },
     });
+    return res.data;
+  },
+
+  // GitHub Intelligence & DevOps
+  getGitHubAccount: async (): Promise<GitHubAccount> => {
+    const res = await apiClient.get('/github/account');
+    return res.data;
+  },
+
+  getGitHubRepositories: async (): Promise<{ count: number; repositories: GitHubRepository[] }> => {
+    const res = await apiClient.get('/github/repositories');
+    return res.data;
+  },
+
+  toggleRepositoryMonitor: async (
+    repoFullName: string,
+    isMonitored: boolean,
+    defaultBranch = 'main'
+  ): Promise<{ status: string; repo_full_name: string; is_monitored: boolean }> => {
+    const res = await apiClient.post('/github/repositories/monitor', {
+      repo_full_name: repoFullName,
+      is_monitored: isMonitored,
+      default_branch: defaultBranch,
+    });
+    return res.data;
+  },
+
+  getGitHubActivity: async (
+    limit = 30,
+    repoName?: string
+  ): Promise<{ count: number; events: GitHubEventItem[] }> => {
+    const res = await apiClient.get('/github/activity', {
+      params: { limit, ...(repoName ? { repo_name: repoName } : {}) },
+    });
+    return res.data;
+  },
+
+  getGitHubFailures: async (
+    limit = 20,
+    status?: string
+  ): Promise<{ count: number; failures: WorkflowFailureItem[] }> => {
+    const res = await apiClient.get('/github/failures', {
+      params: { limit, ...(status ? { status } : {}) },
+    });
+    return res.data;
+  },
+
+  getGitHubFailureDetail: async (failureId: string): Promise<WorkflowFailureItem> => {
+    const res = await apiClient.get(`/github/failures/${failureId}`);
+    return res.data;
+  },
+
+  analyzeFailure: async (
+    failureId: string
+  ): Promise<{
+    failure_id: string;
+    root_cause: string;
+    suggested_fix: string;
+    failing_step?: string;
+    analysis_summary?: string;
+  }> => {
+    const res = await apiClient.post(`/github/failures/${failureId}/analyze`);
+    return res.data;
+  },
+
+  proposeFix: async (
+    failureId: string
+  ): Promise<{
+    status: string;
+    proposal_id: string;
+    approval_id?: string;
+    files_changed?: string[];
+    diff_content?: string;
+    branch_name?: string;
+  }> => {
+    const res = await apiClient.post(`/github/failures/${failureId}/propose-fix`);
+    return res.data;
+  },
+
+  getGitHubProposals: async (statusFilter?: string): Promise<FixProposalItem[]> => {
+    const res = await apiClient.get('/github/proposals', {
+      params: statusFilter ? { status_filter: statusFilter } : {},
+    });
+    return res.data;
+  },
+
+  executeProposal: async (
+    proposalId: string
+  ): Promise<{
+    status: string;
+    proposal_id: string;
+    pr_url: string;
+    pr_number?: number;
+    message: string;
+  }> => {
+    const res = await apiClient.post(`/github/proposals/${proposalId}/execute`);
+    return res.data;
+  },
+
+  getGitHubHealth: async (): Promise<GitHubHealth> => {
+    const res = await apiClient.get('/github/health');
+    return res.data;
+  },
+
+  getNotifications: async (
+    unreadOnly = false
+  ): Promise<{ unread_count: number; notifications: GitHubNotificationItem[] }> => {
+    const res = await apiClient.get('/github/notifications', {
+      params: { unread_only: unreadOnly },
+    });
+    return res.data;
+  },
+
+  markNotificationRead: async (notificationId: string): Promise<{ status: string; id: string }> => {
+    const res = await apiClient.post(`/github/notifications/${notificationId}/read`);
+    return res.data;
+  },
+
+  markAllNotificationsRead: async (): Promise<{ status: string }> => {
+    const res = await apiClient.post('/github/notifications/read-all');
+    return res.data;
+  },
+
+  syncGitHubData: async (): Promise<{
+    status: string;
+    synced_repositories: number;
+    new_items_synced: number;
+    synced_at: string;
+  }> => {
+    const res = await apiClient.post('/github/sync');
     return res.data;
   },
 };

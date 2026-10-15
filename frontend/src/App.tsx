@@ -5,6 +5,7 @@ import { DashboardPage } from './pages/DashboardPage';
 import { ChatPage } from './pages/ChatPage';
 import { ApprovalsPage } from './pages/ApprovalsPage';
 import { IntegrationsPage } from './pages/IntegrationsPage';
+import { GitHubDevOpsPage } from './pages/GitHubDevOpsPage';
 import { AuditPage } from './pages/AuditPage';
 import { LoginPage } from './pages/LoginPage';
 import { api } from './services/api';
@@ -112,6 +113,7 @@ export const App: React.FC = () => {
                 <Route path="/" element={<DashboardPage />} />
                 <Route path="/chat" element={<ChatPage />} />
                 <Route path="/approvals" element={<ApprovalsPage />} />
+                <Route path="/github" element={<GitHubDevOpsPage />} />
                 <Route path="/integrations" element={<IntegrationsPage />} />
                 <Route path="/audit" element={<AuditPage />} />
                 <Route path="*" element={<Navigate to="/" replace />} />

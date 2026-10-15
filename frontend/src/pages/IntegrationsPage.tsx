@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { 
   Blocks, 
   Database, 
   GitBranch, 
   Mail, 
-  Calendar 
+  Calendar,
+  ArrowRight
 } from 'lucide-react';
 import { api } from '../services/api';
 import { Integration } from '../types';
@@ -21,6 +23,7 @@ const fetchClientTools = async () => {
 };
 
 export const IntegrationsPage: React.FC = () => {
+  const navigate = useNavigate();
   const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [totalTools, setTotalTools] = useState<number>(0);
   const [toolsList, setToolsList] = useState<any[]>([]);
@@ -124,6 +127,20 @@ export const IntegrationsPage: React.FC = () => {
                 ))}
               </div>
             </div>
+
+            {item.provider.toLowerCase() === 'github' && (
+              <div className="pt-2 border-t border-slate-800/80">
+                <button
+                  id="btn-manage-github-intelligence"
+                  onClick={() => navigate('/github')}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-purple-500/10 text-purple-300 border border-purple-500/30 hover:bg-purple-500/20 transition-all shadow-sm"
+                >
+                  <GitBranch className="w-4 h-4 text-purple-400" />
+                  <span>Launch GitHub Intelligence & CI/CD DevOps</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
           </div>
         ))}
       </div>

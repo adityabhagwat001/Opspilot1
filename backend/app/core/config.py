@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     GITHUB_TOKEN: Optional[str] = ""
     GITHUB_DEFAULT_OWNER: Optional[str] = ""
     GITHUB_DEFAULT_REPO: Optional[str] = ""
+    GITHUB_WEBHOOK_SECRET: Optional[str] = "opspilot_github_webhook_secret_dev"
 
     # LLM Settings
     LLM_PROVIDER: str = "openai"  # openai, anthropic, mock, ollama

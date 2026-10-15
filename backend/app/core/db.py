@@ -30,7 +30,12 @@ async def init_system_db():
                 ("approval_requests", "target_resource", "VARCHAR(255)"),
                 ("approval_requests", "nonce", "VARCHAR(64)"),
                 ("audit_logs", "execution_id", "VARCHAR(50)"),
-                ("audit_logs", "correlation_id", "VARCHAR(64)")
+                ("audit_logs", "correlation_id", "VARCHAR(64)"),
+                ("workflow_failures", "root_cause", "TEXT"),
+                ("workflow_failures", "workflow_id", "VARCHAR(50)"),
+                ("workflow_failures", "html_url", "VARCHAR(255)"),
+                ("fix_proposals", "pr_number", "INTEGER"),
+                ("in_app_notifications", "user_id", "VARCHAR(50)")
             ]:
                 try:
                     sync_conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN {col} {typ}"))

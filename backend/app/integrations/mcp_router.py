@@ -31,6 +31,10 @@ WRITE_TOOLS = {
     "create_issue": "github",
     "update_issue": "github",
     "add_issue_comment": "github",
+    "create_branch": "github",
+    "commit_file_changes": "github",
+    "create_pull_request": "github",
+    "rerun_workflow": "github",
     # Productivity (Email & Calendar)
     "create_email_draft": "email",
     "send_email": "email",
@@ -52,17 +56,26 @@ SERVER_MAPPING = {
     "update_incident_status": pg_mcp,
 
     # GitHub Server
+    "get_authenticated_user": gh_mcp,
     "list_repositories": gh_mcp,
     "get_repository_details": gh_mcp,
+    "get_repository_file": gh_mcp,
     "list_issues": gh_mcp,
     "get_issue_details": gh_mcp,
     "list_pull_requests": gh_mcp,
     "get_pull_request_details": gh_mcp,
+    "get_pull_request_diff": gh_mcp,
     "list_recent_commits": gh_mcp,
     "get_workflow_runs": gh_mcp,
+    "list_workflow_run_jobs": gh_mcp,
+    "get_workflow_logs": gh_mcp,
     "create_issue": gh_mcp,
     "update_issue": gh_mcp,
     "add_issue_comment": gh_mcp,
+    "create_branch": gh_mcp,
+    "commit_file_changes": gh_mcp,
+    "create_pull_request": gh_mcp,
+    "rerun_workflow": gh_mcp,
 
     # Productivity Server
     "list_messages": prod_mcp,

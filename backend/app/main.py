@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.db import init_system_db
-from app.api import auth, dashboard, chat, approvals, integrations, audit
+from app.api import auth, dashboard, chat, approvals, integrations, audit, github_ops
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -40,6 +40,7 @@ app.include_router(chat.router, prefix="/api")
 app.include_router(approvals.router, prefix="/api")
 app.include_router(integrations.router, prefix="/api")
 app.include_router(audit.router, prefix="/api")
+app.include_router(github_ops.router, prefix="/api")
 
 @app.get("/health")
 async def health_check():

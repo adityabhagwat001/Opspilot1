@@ -151,3 +151,211 @@ class AuditLog(Base):
     result_summary: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(20), default="success")  # success, failure, rejected
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now)
+
+# =========================================================================
+# GITHUB INTELLIGENCE & DEVOPS ADDITIVE MODELS
+# =========================================================================
+
+class MonitoredRepository(Base):
+    __tablename__ = "monitored_repositories"
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True, default=generate_uuid)
+    workspace_id: Mapped[str] = mapped_column(String(50), default="default-ops", index=True)
+    owner: Mapped[str] = mapped_column(String(100), nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    full_name: Mapped[str] = mapped_column(String(200), unique=True, index=True, nullable=False)
+    default_branch: Mapped[str] = mapped_column(String(50), default="main")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    health_score: Mapped[int] = mapped_column(Integer, default=100)
+    last_sync_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now)
+
+    @property
+    def is_monitored(self) -> bool:
+        return self.is_active
+
+    @is_monitored.setter
+    def is_monitored(self, value: bool):
+        self.is_active = value
+
+    @property
+    def repo_full_name(self) -> str:
+        return self.full_name
+
+    @repo_full_name.setter
+    def repo_full_name(self, value: str):
+        self.full_name = value
+
+    @property
+    def repo_name(self) -> str:
+        return self.name
+
+    @repo_name.setter
+    def repo_name(self, value: str):
+        self.name = value
+
+    @property
+    def last_synced_at(self) -> datetime.datetime:
+        return self.last_sync_at
+
+    @last_synced_at.setter
+    def last_synced_at(self, value: datetime.datetime):
+        self.last_sync_at = value
+
+class GitHubEvent(Base):
+    __tablename__ = "github_events"
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True, default=generate_uuid)
+    workspace_id: Mapped[str] = mapped_column(String(50), default="default-ops", index=True)
+    delivery_id: Mapped[Optional[str]] = mapped_column(String(64), unique=True, nullable=True, index=True)
+    repo_full_name: Mapped[str] = mapped_column(String(200), index=True, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)  # push, workflow_run, pull_request, issues
+    action: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # completed, opened, synchronize
+    actor: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    summary: Mapped[str] = mapped_column(String(255), nullable=False)
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now, index=True)
+
+    @property
+    def sender(self) -> Optional[str]:
+        return self.actor
+
+    @sender.setter
+    def sender(self, value: Optional[str]):
+        self.actor = value
+
+class WorkflowFailure(Base):
+    __tablename__ = "workflow_failures"
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True, default=generate_uuid)
+    workspace_id: Mapped[str] = mapped_column(String(50), default="default-ops", index=True)
+    repo_full_name: Mapped[str] = mapped_column(String(200), index=True, nullable=False)
+    run_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    workflow_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    workflow_name: Mapped[str] = mapped_column(String(150), nullable=False)
+    event: Mapped[str] = mapped_column(String(50), default="push")
+    head_branch: Mapped[str] = mapped_column(String(100), default="main")
+    commit_sha: Mapped[str] = mapped_column(String(64), nullable=False)
+    commit_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    actor: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    html_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    failing_step: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
+    error_log_snippet: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    analysis_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    root_cause: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="detected", index=True)  # detected, analyzing, fix_proposed, fix_approved, resolved
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now, index=True)
+
+    @property
+    def branch(self) -> str:
+        return self.head_branch
+
+    @branch.setter
+    def branch(self, value: str):
+        self.head_branch = value
+
+    @property
+    def sender(self) -> Optional[str]:
+        return self.actor
+
+    @sender.setter
+    def sender(self, value: Optional[str]):
+        self.actor = value
+
+    @property
+    def detected_at(self) -> datetime.datetime:
+        return self.created_at
+
+    @detected_at.setter
+    def detected_at(self, value: datetime.datetime):
+        self.created_at = value
+
+class FixProposal(Base):
+    __tablename__ = "fix_proposals"
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True, default=generate_uuid)
+    workspace_id: Mapped[str] = mapped_column(String(50), default="default-ops", index=True)
+    failure_id: Mapped[Optional[str]] = mapped_column(String(50), ForeignKey("workflow_failures.id"), nullable=True)
+    repo_full_name: Mapped[str] = mapped_column(String(200), index=True, nullable=False)
+    target_branch: Mapped[str] = mapped_column(String(100), default="main")
+    fix_branch: Mapped[str] = mapped_column(String(100), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    explanation: Mapped[str] = mapped_column(Text, nullable=False)
+    files_modified_json: Mapped[str] = mapped_column(Text, default="[]")  # list of {path, original, proposed, diff}
+    diff: Mapped[str] = mapped_column(Text, default="")
+    approval_id: Mapped[Optional[str]] = mapped_column(String(50), ForeignKey("approval_requests.id"), nullable=True)
+    pull_request_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    pr_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="proposed", index=True)  # proposed, approved, executed, rejected, failed
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now)
+
+    @property
+    def branch_name(self) -> str:
+        return self.fix_branch
+
+    @branch_name.setter
+    def branch_name(self, value: str):
+        self.fix_branch = value
+
+    @property
+    def description(self) -> str:
+        return self.explanation
+
+    @description.setter
+    def description(self, value: str):
+        self.explanation = value
+
+    @property
+    def diff_content(self) -> str:
+        return self.diff
+
+    @diff_content.setter
+    def diff_content(self, value: str):
+        self.diff = value
+
+    @property
+    def files_changed_json(self) -> str:
+        return self.files_modified_json
+
+    @files_changed_json.setter
+    def files_changed_json(self, value: str):
+        self.files_modified_json = value
+
+    @property
+    def pr_url(self) -> Optional[str]:
+        return self.pull_request_url
+
+    @pr_url.setter
+    def pr_url(self, value: Optional[str]):
+        self.pull_request_url = value
+
+class InAppNotification(Base):
+    __tablename__ = "in_app_notifications"
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True, default=generate_uuid)
+    workspace_id: Mapped[str] = mapped_column(String(50), default="default-ops", index=True)
+    user_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    title: Mapped[str] = mapped_column(String(150), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    level: Mapped[str] = mapped_column(String(20), default="info")  # info, warning, error, success
+    category: Mapped[str] = mapped_column(String(30), default="github")  # github, approval, system
+    link: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now, index=True)
+
+    @property
+    def notification_type(self) -> str:
+        return self.category
+
+    @notification_type.setter
+    def notification_type(self, value: str):
+        self.category = value
+
+    @property
+    def reference_id(self) -> Optional[str]:
+        return self.link
+
+    @reference_id.setter
+    def reference_id(self, value: Optional[str]):
+        self.link = value
+

@@ -78,3 +78,109 @@ export interface ChatMessage {
   pending_approval?: ApprovalRequest | null;
   timestamp: string;
 }
+
+export interface GitHubAccount {
+  status: string;
+  connected: boolean;
+  login?: string;
+  name?: string;
+  avatar_url?: string;
+  html_url?: string;
+  public_repos?: number;
+  total_private_repos?: number;
+  scopes?: string[];
+  note?: string;
+  message?: string;
+  error?: string;
+}
+
+export interface GitHubRepository {
+  id: number;
+  name: string;
+  full_name: string;
+  owner: string;
+  description: string;
+  html_url: string;
+  default_branch: string;
+  private: boolean;
+  is_monitored: boolean;
+  health_score: number;
+  last_synced_at?: string | null;
+}
+
+export interface GitHubEventItem {
+  id: string;
+  delivery_id: string;
+  repo_name: string;
+  event_type: string;
+  action: string;
+  actor: string;
+  summary: string;
+  created_at: string;
+  payload?: any;
+}
+
+export interface WorkflowFailureItem {
+  id: string;
+  repo_name: string;
+  workflow_name: string;
+  run_id: number;
+  commit_sha?: string;
+  commit_message?: string;
+  branch: string;
+  sender: string;
+  html_url?: string;
+  failing_step?: string;
+  error_snippet?: string;
+  root_cause?: string;
+  suggested_fix?: string;
+  status: 'detected' | 'analyzed' | 'fix_proposed' | 'fix_applied' | 'resolved';
+  detected_at: string;
+  analysis?: any;
+  proposal?: any;
+}
+
+export interface FixProposalItem {
+  id: string;
+  failure_id: string;
+  repo_name: string;
+  branch_name: string;
+  title: string;
+  description: string;
+  diff_content: string;
+  status: 'proposed' | 'pending' | 'approved' | 'applied' | 'rejected' | 'failed';
+  approval_id?: string;
+  pr_url?: string;
+  pr_number?: number;
+  created_at: string;
+}
+
+export interface GitHubHealth {
+  monitored_repositories_count: number;
+  total_failures_detected: number;
+  active_failures_count: number;
+  resolved_failures_count: number;
+  total_events_ingested: number;
+  overall_health_score: number;
+  status: 'OPTIMAL' | 'WARNING' | 'CRITICAL';
+  repositories: {
+    repo_full_name: string;
+    owner: string;
+    repo_name: string;
+    default_branch: string;
+    health_score: number;
+    active_failures: number;
+    last_synced_at?: string | null;
+  }[];
+}
+
+export interface GitHubNotificationItem {
+  id: string;
+  title: string;
+  message: string;
+  notification_type: string;
+  reference_id?: string;
+  is_read: boolean;
+  created_at: string;
+}
+

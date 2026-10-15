@@ -7,7 +7,8 @@ import {
   Blocks, 
   ScrollText, 
   LogOut, 
-  Terminal
+  Terminal,
+  GitBranch
 } from 'lucide-react';
 import { User } from '../types';
 
@@ -90,6 +91,21 @@ export const Navbar: React.FC<NavbarProps> = ({ user, pendingApprovalsCount, onL
                   {pendingApprovalsCount}
                 </span>
               )}
+            </NavLink>
+
+            <NavLink
+              to="/github"
+              id="nav-github"
+              className={({ isActive }) =>
+                `flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-medium transition-all ${
+                  isActive
+                    ? 'bg-slate-800/80 text-emerald-400 shadow-sm border border-slate-700/60'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
+                }`
+              }
+            >
+              <GitBranch className="w-4 h-4" />
+              <span>GitHub DevOps</span>
             </NavLink>
 
             <NavLink
