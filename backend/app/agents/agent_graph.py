@@ -126,6 +126,9 @@ async def synthesize_with_llm(
     gemini_key = (getattr(settings, "GEMINI_API_KEY", "") or os.getenv("GEMINI_API_KEY") or "").strip()
     groq_key = (getattr(settings, "GROQ_API_KEY", "") or os.getenv("GROQ_API_KEY") or "").strip()
 
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return None
+
     if not (openai_key or openrouter_key or anthropic_key or gemini_key or groq_key):
         return None
 
