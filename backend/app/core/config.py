@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: Optional[str] = ""
     ANTHROPIC_API_KEY: Optional[str] = ""
     OPENROUTER_API_KEY: Optional[str] = ""
+    GEMINI_API_KEY: Optional[str] = ""
+    GROQ_API_KEY: Optional[str] = ""
 
 settings = Settings()
 

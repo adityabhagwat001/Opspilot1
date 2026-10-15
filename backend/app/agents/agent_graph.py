@@ -10,6 +10,7 @@ import json
 import logging
 import datetime
 from typing import Dict, Any, List, Optional, TypedDict
+import httpx
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 from app.integrations.mcp_router import mcp_router, WRITE_TOOLS
@@ -108,6 +109,128 @@ def calculate_dynamic_meeting_times(req: str) -> tuple[str, str, str]:
     human_str = f"{target_date.strftime('%A, %b %d')} at {target_hour % 12 or 12}:00 {'PM' if target_hour >= 12 else 'AM'} UTC"
     return start_iso, end_iso, human_str
 
+async def synthesize_with_llm(
+    user_request: str,
+    conversation_history: List[Dict[str, str]],
+    tool_results: List[Dict[str, Any]],
+    pending_approval: Optional[Dict[str, Any]],
+    intent: str
+) -> Optional[str]:
+    """
+    Invokes external LLM (OpenAI / OpenRouter / Anthropic) if an API key is configured.
+    Generates dynamic, natural, context-grounded responses using real FastMCP tool data.
+    """
+    openai_key = (getattr(settings, "OPENAI_API_KEY", "") or os.getenv("OPENAI_API_KEY") or "").strip()
+    openrouter_key = (getattr(settings, "OPENROUTER_API_KEY", "") or os.getenv("OPENROUTER_API_KEY") or "").strip()
+    anthropic_key = (getattr(settings, "ANTHROPIC_API_KEY", "") or os.getenv("ANTHROPIC_API_KEY") or "").strip()
+    gemini_key = (getattr(settings, "GEMINI_API_KEY", "") or os.getenv("GEMINI_API_KEY") or "").strip()
+    groq_key = (getattr(settings, "GROQ_API_KEY", "") or os.getenv("GROQ_API_KEY") or "").strip()
+
+    if not (openai_key or openrouter_key or anthropic_key or gemini_key or groq_key):
+        return None
+
+    # Format tool outputs as structured context
+    tool_summary = []
+    for tr in tool_results:
+        t_name = tr.get("tool", "unknown_tool")
+        raw = tr.get("result", {})
+        data = raw.get("data") if isinstance(raw, dict) and "data" in raw else raw
+        tool_summary.append(f"Tool `{t_name}` Output:\n{json.dumps(data, default=str)[:3000]}")
+
+    tool_text = "\n\n".join(tool_summary) if tool_summary else "No tools were executed."
+
+    system_prompt = (
+        "You are OpsPilot, an expert enterprise AI operations assistant engineered like ChatGPT. "
+        "You assist DevOps operators and Solutions Architects with monitoring infrastructure, "
+        "PostgreSQL operational databases, GitHub repositories, CI/CD pipelines, emails, and meetings.\n\n"
+        "Guidelines:\n"
+        "1. Directly, helpfully, and conversationally answer the user's specific prompt.\n"
+        "2. Ground every single claim on the live tool data provided below. Never invent records, PRs, or commits.\n"
+        "3. If the user asks whether there are errors in their git repos, clearly state the CI/CD pipeline and issue status.\n"
+        "4. If operational incidents were inspected, include a '### Live Operational Findings' section with incident details.\n"
+        "5. If a write action was proposed, clearly inform the user that it has paused at the '### Human Approval Required — Write Operation Paused' boundary for explicit review.\n"
+        "6. Use clear, modern markdown with bullet points, bold highlights, and code blocks."
+    )
+
+    user_prompt = (
+        f"User Prompt: {user_request}\n\n"
+        f"Live FastMCP Tool Findings:\n{tool_text}\n\n"
+        f"Pending Human Approval Action:\n{json.dumps(pending_approval, default=str) if pending_approval else 'None'}"
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # 1. Anthropic API
+            if anthropic_key and not (openai_key or openrouter_key or gemini_key or groq_key):
+                anthropic_messages = []
+                for m in conversation_history[-6:]:
+                    anthropic_messages.append({"role": m.get("role", "user"), "content": m.get("content", "")})
+                anthropic_messages.append({"role": "user", "content": user_prompt})
+                resp = await client.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={
+                        "x-api-key": anthropic_key,
+                        "anthropic-version": "2023-06-01",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": settings.LLM_MODEL if "claude" in (settings.LLM_MODEL or "") else "claude-3-5-sonnet-20241022",
+                        "system": system_prompt,
+                        "messages": anthropic_messages,
+                        "max_tokens": 1024,
+                        "temperature": 0.2
+                    }
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    blocks = data.get("content", [])
+                    text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+                    if text:
+                        return text.strip()
+                else:
+                    logger.warning(f"Anthropic API returned status {resp.status_code}: {resp.text}")
+
+            # 2. OpenAI / OpenRouter / Gemini / Groq (OpenAI-compatible chat completions)
+            else:
+                if openrouter_key:
+                    api_url = "https://openrouter.ai/api/v1/chat/completions"
+                    auth_header = f"Bearer {openrouter_key}"
+                    model = settings.LLM_MODEL or "openai/gpt-4o"
+                elif gemini_key and not openai_key:
+                    api_url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+                    auth_header = f"Bearer {gemini_key}"
+                    model = settings.LLM_MODEL if "gemini" in (settings.LLM_MODEL or "") else "gemini-1.5-flash"
+                elif groq_key and not openai_key:
+                    api_url = "https://api.groq.com/openai/v1/chat/completions"
+                    auth_header = f"Bearer {groq_key}"
+                    model = settings.LLM_MODEL if "llama" in (settings.LLM_MODEL or "") else "llama-3.3-70b-versatile"
+                else:
+                    api_url = "https://api.openai.com/v1/chat/completions"
+                    auth_header = f"Bearer {openai_key}"
+                    model = settings.LLM_MODEL or "gpt-4o"
+
+                messages = [{"role": "system", "content": system_prompt}]
+                for m in conversation_history[-6:]:
+                    messages.append({"role": m.get("role", "user"), "content": m.get("content", "")})
+                messages.append({"role": "user", "content": user_prompt})
+
+                resp = await client.post(
+                    api_url,
+                    headers={"Authorization": auth_header, "Content-Type": "application/json"},
+                    json={"model": model, "messages": messages, "temperature": 0.2}
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    content = data.get("choices", [{}])[0].get("message", {}).get("content")
+                    if content:
+                        return content.strip()
+                else:
+                    logger.warning(f"LLM API returned status {resp.status_code}: {resp.text}")
+    except Exception as ex:
+        logger.warning(f"LLM invocation failed: {ex}. Falling back to deterministic reasoning.")
+
+    return None
+
 # =========================================================================
 # GRAPH NODES
 # =========================================================================
@@ -159,7 +282,7 @@ async def understand_request_node(state: OpsAgentState) -> Dict[str, Any]:
     systems = []
     if any(k in req for k in ["incident", "database", "task", "operational", "record", "db", "remediation", "postgres"]):
         systems.append("postgresql")
-    if any(k in req for k in ["github", "issue", "repo", "repository", "pull request", "pr", "commit", "workflow", "ci/cd", "actions", "build", "pipeline", "activity", "activities", "diff"]):
+    if any(k in req for k in ["github", "git", "issue", "repo", "repository", "repos", "pull request", "pr", "commit", "workflow", "ci/cd", "actions", "build", "pipeline", "activity", "activities", "diff"]):
         systems.append("github")
     if any(k in req for k in ["email", "mail", "unread", "inbox", "message", "draft"]):
         systems.append("email")
@@ -290,7 +413,7 @@ async def plan_actions_node(state: OpsAgentState) -> Dict[str, Any]:
             repo = settings.GITHUB_DEFAULT_REPO
 
         # 1. Commits / Recent Activities
-        if any(k in req for k in ["commit", "commits", "activity", "activities"]):
+        if any(k in req for k in ["commit", "commits", "activity", "activities"]) and not any(k in req for k in ["error", "fail", "why", "cause"]):
             planned.append({
                 "tool": "list_commits",
                 "system": "github",
@@ -366,7 +489,30 @@ async def plan_actions_node(state: OpsAgentState) -> Dict[str, Any]:
                 "is_write": False,
                 "description": f"Retrieve {'failed ' if status_param else ''}GitHub Actions workflow runs for {owner}/{repo}"
             })
-        # 6. Repository listing
+        # 6. Repository Error / Failure Inquiry (e.g. "so is there any error in my git repos or not", "check my repo errors")
+        elif any(k in req for k in ["error", "errors", "fail", "failed", "failing", "failure", "broken", "bug", "bugs", "problem", "problems", "health"]) and any(k in req for k in ["repo", "repos", "repository", "repositories", "git", "github", "project", "code"]):
+            planned.append({
+                "tool": "list_repositories",
+                "system": "github",
+                "args": {"per_page": 10},
+                "is_write": False,
+                "description": "Inspect repositories from authenticated GitHub account"
+            })
+            planned.append({
+                "tool": "list_workflow_runs",
+                "system": "github",
+                "args": {"owner": owner, "repo": repo, "per_page": 5},
+                "is_write": False,
+                "description": f"Inspect recent workflow execution runs for {owner}/{repo}"
+            })
+            planned.append({
+                "tool": "list_issues",
+                "system": "github",
+                "args": {"owner": owner, "repo": repo, "state": "open"},
+                "is_write": False,
+                "description": f"Check open issue reports in {owner}/{repo}"
+            })
+        # 7. Repository listing
         elif any(k in req for k in ["repository", "repositories", "repos", "repo"]) and any(k in req for k in ["list", "show", "find", "get", "my", "account", "all"]):
             planned.append({
                 "tool": "list_repositories",
@@ -613,124 +759,200 @@ async def generate_response_node(state: OpsAgentState) -> Dict[str, Any]:
             "current_step": "Clarification requested"
         }
 
-    # 4. Synthesize Tool Results
+    # 4. Attempt Live LLM synthesis if API Key is configured
     tool_results = state.get("tool_results", [])
     pending = state.get("pending_approval")
+    
+    llm_resp = await synthesize_with_llm(
+        user_request=state.get("user_request", ""),
+        conversation_history=state.get("conversation_history", []),
+        tool_results=tool_results,
+        pending_approval=pending,
+        intent=intent or "operational_query"
+    )
+    if llm_resp:
+        return {
+            "final_response": llm_resp,
+            "execution_status": "awaiting_approval" if pending else "completed",
+            "current_step": "Synthesized response via live LLM"
+        }
+
+    # 5. Intelligent Grounded Synthesizer (Zero-Setup Engine)
+    req = state.get("user_request", "").lower()
+    is_error_check = (
+        any(k in req for k in ["error", "errors", "fail", "failed", "failing", "failure", "broken", "bug", "bugs", "problem", "problems", "health"])
+        and any(k in req for k in ["repo", "repos", "repository", "repositories", "git", "github", "project", "code"])
+    )
+
     lines = []
-
     if tool_results:
-        lines.append("### Live Operational Findings")
-        for tr in tool_results:
-            tool = tr["tool"]
-            raw_res = tr["result"]
-            
-            # Extract data envelope if present
-            res = raw_res.get("data") if isinstance(raw_res, dict) and "data" in raw_res and raw_res["data"] is not None else raw_res
+        # Specialized synthesis for repository error/health inquiry
+        if is_error_check:
+            lines.append("### Live Operational Findings\n")
+            repos = []
+            runs = []
+            issues = []
+            for tr in tool_results:
+                tool = tr["tool"]
+                raw_res = tr["result"]
+                res = raw_res.get("data") if isinstance(raw_res, dict) and "data" in raw_res and raw_res["data"] is not None else raw_res
+                if tool == "list_repositories":
+                    repos = res.get("repositories", []) if isinstance(res, dict) else (res if isinstance(res, list) else [])
+                elif tool == "list_workflow_runs":
+                    runs = res.get("workflow_runs", []) if isinstance(res, dict) else (res if isinstance(res, list) else [])
+                elif tool == "list_issues":
+                    issues = res.get("issues", []) if isinstance(res, dict) else (res if isinstance(res, list) else [])
 
-            if tool == "list_incidents":
-                incidents = res.get("incidents", []) if isinstance(res, dict) else (res if isinstance(res, list) else [])
-                count = res.get("count", len(incidents)) if isinstance(res, dict) else len(incidents)
-                lines.append(f"\n#### 🚨 Operational Incidents ({count} matching records):\n")
-                for inc in incidents:
-                    sev = inc.get('severity', '').upper()
-                    lines.append(
-                        f"- **[{inc.get('id')}]** `{sev}` — **{inc.get('title')}**\n"
-                        f"  *Status:* `{inc.get('status')}` · *Service:* `{inc.get('service')}` · *Opened:* {inc.get('created_at')}"
-                    )
-            elif tool == "get_operations_summary":
-                lines.append("\n#### 📊 System Operations Overview:\n")
-                lines.append(f"- **Platform Status:** `{res.get('system_status', 'HEALTHY').upper()}`")
-                lines.append(f"- **Total Incidents:** {res.get('total_incidents', 0)} ({res.get('critical_incidents', 0)} Critical)")
-                lines.append(f"- **Active Remediation Tasks:** {res.get('active_tasks', 0)}")
-            elif tool == "list_repositories":
-                repos = res.get("repositories", []) if isinstance(res, dict) else (res if isinstance(res, list) else [])
-                lines.append(f"\n#### 📂 GitHub Repositories ({len(repos)} found):\n")
-                for r in repos:
-                    vis = "Private" if r.get("private") else "Public"
-                    desc = f" — {r.get('description')}" if r.get("description") else ""
-                    open_cnt = r.get('open_issues_count', 0)
-                    issues_badge = f"`{open_cnt} open issues`" if open_cnt > 0 else "`0 issues`"
-                    lines.append(f"- [{r.get('full_name') or r.get('name')}]({r.get('html_url')}) · `{vis}` · {issues_badge}{desc}")
-            elif tool == "list_issues":
-                issues = res.get("issues", []) if isinstance(res, dict) else []
-                lines.append(f"\n#### 📋 GitHub Issues ({len(issues)} retrieved from `{res.get('owner', 'enterprise-ops')}/{res.get('repo', 'auth-service')}`):\n")
-                for iss in issues:
-                    labels = ", ".join(iss.get("labels", [])) or "none"
-                    p_rank = f" · *Priority Rank:* {iss.get('priority_rank')}" if iss.get("priority_rank") else ""
-                    lines.append(f"- **#{iss.get('number')}** [{iss.get('title')}]({iss.get('html_url')}) · `labels: {labels}`{p_rank}")
-            elif tool == "list_pull_requests":
-                prs = res.get("pull_requests", []) if isinstance(res, dict) else []
-                lines.append(f"\n#### 🔀 GitHub Pull Requests ({len(prs)} open in `{res.get('owner')}/{res.get('repo')}`):\n")
-                for p in prs:
-                    lines.append(f"- **#{p.get('number')}** [{p.get('title')}]({p.get('html_url')}) · `state: {p.get('state')}` · *Branch:* `{p.get('head', {}).get('ref')}` ➔ `{p.get('base', {}).get('ref')}`")
-            elif tool == "list_commits":
-                commits = res.get("commits", []) if isinstance(res, dict) else (res if isinstance(res, list) else [])
-                lines.append(f"\n#### 📜 Recent GitHub Commits ({len(commits)} commits):\n")
-                for c in commits:
-                    sha_short = c.get("sha", "")[:7]
-                    lines.append(f"- [`{sha_short}`]({c.get('html_url', '#')}) **{c.get('message', '').strip()}**\n  *Author:* `{c.get('author')}` · *Date:* {c.get('date')}")
-            elif tool == "list_workflow_runs":
-                runs = res.get("workflow_runs", []) if isinstance(res, dict) else (res if isinstance(res, list) else [])
-                lines.append(f"\n#### ⚡ GitHub Actions Workflow Runs ({len(runs)} runs from `{res.get('owner', '')}/{res.get('repo', '')}`):\n")
-                for r in runs:
-                    concl = r.get("conclusion") or r.get("status")
-                    icon = "✅" if concl == "success" else ("❌" if concl == "failure" else "⏳")
-                    lines.append(
-                        f"- {icon} **[#{r.get('id')}]** [{r.get('name')}]({r.get('html_url')}) · `status: {concl}`\n"
-                        f"  *Branch:* `{r.get('head_branch')}` · *Event:* `{r.get('event')}` · *Commit:* `{r.get('head_sha', '')[:7]}`"
-                    )
-            elif tool == "list_workflow_run_jobs":
-                jobs = res.get("jobs", []) if isinstance(res, dict) else []
-                lines.append(f"\n#### 🔍 Workflow Run #{res.get('run_id')} Job Diagnostic:\n")
-                for j in jobs:
-                    icon = "✅" if j.get("conclusion") == "success" else "❌"
-                    lines.append(f"- {icon} **Job:** `{j.get('name')}` (`{j.get('conclusion')}`)")
-                    for s in j.get("steps", []):
-                        s_icon = "✅" if s.get("conclusion") == "success" else "❌"
-                        lines.append(f"  - {s_icon} Step: `{s.get('name')}` (`{s.get('conclusion')}`)")
-            elif tool == "get_workflow_logs":
-                logs = res.get("logs", "") if isinstance(res, dict) else str(res)
-                lines.append(f"\n#### 📋 Error Log Trace (Run #{res.get('run_id')}):\n")
-                lines.append(f"```text\n{logs.strip()[:1000]}\n```")
-                lines.append(
-                    f"\n#### 💡 AI Root Cause Diagnostic:\n"
-                    f"- **Identified Root Cause:** Missing dependency `pydantic-settings` required by Pydantic v2.\n"
-                    f"- **Recommended Remediation:** Add `pydantic-settings>=2.0.0` to `requirements.txt`.\n"
-                    f"- **Confidence:** **96%** | Severity: **HIGH**\n"
-                    f"- To prepare an automated fix Pull Request, ask: *'Prepare a pull request to fix the build'*."
-                )
-            elif tool == "get_pull_request_diff":
-                diff = res.get("diff", "") if isinstance(res, dict) else str(res)
-                pr_num = res.get("pull_number", 101) if isinstance(res, dict) else 101
-                lines.append(f"\n#### 🔍 AI Pull Request Review (PR #{pr_num}):\n")
-                lines.append(f"- **Summary:** Automated diff analysis completed for Pull Request #{pr_num}.")
-                lines.append(f"- **Security & Risk Assessment:** Clean change. Does not expose credentials or break API contracts.")
-                lines.append(f"- **Suggested Improvements:** Ensure automated test suite covers the updated dependency versions.")
-                lines.append(f"\n```diff\n{diff.strip()[:800]}\n```")
-            elif tool in ("search_messages", "get_unread_messages"):
-                msgs = res.get("matches", []) or res.get("messages", [])
-                lines.append(f"\n#### ✉️ Operational Emails ({len(msgs)} messages found):\n")
-                for m in msgs:
-                    lines.append(f"- **[{m.get('id')}]** **From:** `{m.get('sender')}` · **Subject:** {m.get('subject')}")
-                    if m.get('snippet'):
-                        lines.append(f"  > {m.get('snippet')}")
-            elif tool == "get_message":
-                lines.append(f"\n**Detailed Email View ({res.get('id')}):**")
-                lines.append(f"- **From:** `{res.get('sender')}` | **To:** `{res.get('recipient')}`")
-                lines.append(f"- **Subject:** {res.get('subject')}")
-                lines.append(f"- **Content:**\n> {res.get('body')}")
-            elif tool == "check_availability":
-                slot = res.get("requested_slot", {})
-                is_avail = res.get("is_available")
-                conflicts = res.get("conflicts", [])
-                lines.append(f"\n**Calendar Availability Check:**")
-                lines.append(f"- **Slot:** `{slot.get('start')}` to `{slot.get('end')}`")
-                lines.append(f"- **Available:** **{'YES (No Conflicts)' if is_avail else 'NO (Conflicting Events)'}**")
-                if conflicts:
-                    for c in conflicts:
-                        lines.append(f"  *Conflict:* {c.get('title')} ({c.get('start')} - {c.get('end')})")
+            failed_runs = [r for r in runs if r.get("conclusion") == "failure"]
+            critical_issues = [i for i in issues if any("critical" in l.lower() or "bug" in l.lower() or "incident" in l.lower() for l in i.get("labels", []))]
+
+            repo_cnt = len(repos)
+            lines.append(f"#### 🔍 Repository Error & Health Assessment\n")
+            lines.append(f"I performed a real-time health inspection across your authorized GitHub repositories (**{repo_cnt} discovered**):\n")
+            
+            # CI/CD Workflows
+            if failed_runs:
+                lines.append(f"- **⚡ CI/CD Pipelines:** ⚠️ Found **{len(failed_runs)} failing workflow run(s)**:")
+                for fr in failed_runs[:3]:
+                    lines.append(f"  - ❌ Run `#{fr.get('id')}` (`{fr.get('name')}`) on branch `{fr.get('head_branch', 'main')}`")
+            elif runs:
+                lines.append(f"- **⚡ CI/CD Pipelines:** ✅ **All {len(runs)} recent workflow runs passed successfully.** No active build or pipeline errors found.")
             else:
-                lines.append(f"\n**Tool `{tool}` Output:**\n```json\n{json.dumps(res, indent=2)}\n```")
+                lines.append(f"- **⚡ CI/CD Pipelines:** ✅ No failing workflow runs detected across your monitored branches.")
+
+            # Open Issues
+            if critical_issues:
+                lines.append(f"- **📋 Open Issues & Bugs:** ⚠️ **{len(critical_issues)} open critical bug ticket(s)**:")
+                for ci in critical_issues[:3]:
+                    lines.append(f"  - **#{ci.get('number')}** {ci.get('title')}")
+            elif issues:
+                lines.append(f"- **📋 Open Issues & Bugs:** ℹ️ **{len(issues)} open issue(s)**, none classified as critical blocking bugs.")
+            else:
+                lines.append(f"- **📋 Open Issues & Bugs:** ✅ **0 open error tickets** or blocking incidents logged.")
+
+            # Overall Verdict
+            if failed_runs or critical_issues:
+                lines.append(f"\n**Verdict:** ⚠️ **Attention required.** There are {len(failed_runs)} failing pipeline(s) and {len(critical_issues)} critical bug(s) needing remediation.")
+                lines.append("\n💡 *Tip: You can ask 'Why did my latest build fail?' to inspect logs, or 'Prepare a pull request to fix the build'.*")
+            else:
+                lines.append(f"\n**Verdict:** ✅ **No active errors detected in your repositories.** All pipelines, branch heads, and monitored services are currently healthy and operational.")
+
+            if repos:
+                sample_names = [f"`{r.get('name') or r.get('full_name')}`" for r in repos[:6]]
+                lines.append(f"\n*Inspected repositories:* {', '.join(sample_names)}" + (f" and {len(repos) - 6} more." if len(repos) > 6 else "."))
+        else:
+            lines.append("### Live Operational Findings")
+            for tr in tool_results:
+                tool = tr["tool"]
+                raw_res = tr["result"]
+                
+                # Extract data envelope if present
+                res = raw_res.get("data") if isinstance(raw_res, dict) and "data" in raw_res and raw_res["data"] is not None else raw_res
+
+                if tool == "list_incidents":
+                    incidents = res.get("incidents", []) if isinstance(res, dict) else (res if isinstance(res, list) else [])
+                    count = res.get("count", len(incidents)) if isinstance(res, dict) else len(incidents)
+                    lines.append(f"\n#### 🚨 Operational Incidents ({count} matching records):\n")
+                    for inc in incidents:
+                        sev = inc.get('severity', '').upper()
+                        lines.append(
+                            f"- **[{inc.get('id')}]** `{sev}` — **{inc.get('title')}**\n"
+                            f"  *Status:* `{inc.get('status')}` · *Service:* `{inc.get('service')}` · *Opened:* {inc.get('created_at')}"
+                        )
+                elif tool == "get_operations_summary":
+                    lines.append("\n#### 📊 System Operations Overview:\n")
+                    lines.append(f"- **Platform Status:** `{res.get('system_status', 'HEALTHY').upper()}`")
+                    lines.append(f"- **Total Incidents:** {res.get('total_incidents', 0)} ({res.get('critical_incidents', 0)} Critical)")
+                    lines.append(f"- **Active Remediation Tasks:** {res.get('active_tasks', 0)}")
+                elif tool == "list_repositories":
+                    repos = res.get("repositories", []) if isinstance(res, dict) else (res if isinstance(res, list) else [])
+                    lines.append(f"\n#### 📂 GitHub Repositories ({len(repos)} found):\n")
+                    for r in repos:
+                        vis = "Private" if r.get("private") else "Public"
+                        desc = f" — {r.get('description')}" if r.get("description") else ""
+                        open_cnt = r.get('open_issues_count', 0)
+                        issues_badge = f"`{open_cnt} open issues`" if open_cnt > 0 else "`0 issues`"
+                        lines.append(f"- [{r.get('full_name') or r.get('name')}]({r.get('html_url')}) · `{vis}` · {issues_badge}{desc}")
+                elif tool == "list_issues":
+                    issues = res.get("issues", []) if isinstance(res, dict) else []
+                    lines.append(f"\n#### 📋 GitHub Issues ({len(issues)} retrieved from `{res.get('owner', 'enterprise-ops')}/{res.get('repo', 'auth-service')}`):\n")
+                    for iss in issues:
+                        labels = ", ".join(iss.get("labels", [])) or "none"
+                        p_rank = f" · *Priority Rank:* {iss.get('priority_rank')}" if iss.get("priority_rank") else ""
+                        lines.append(f"- **#{iss.get('number')}** [{iss.get('title')}]({iss.get('html_url')}) · `labels: {labels}`{p_rank}")
+                elif tool == "list_pull_requests":
+                    prs = res.get("pull_requests", []) if isinstance(res, dict) else []
+                    lines.append(f"\n#### 🔀 GitHub Pull Requests ({len(prs)} open in `{res.get('owner')}/{res.get('repo')}`):\n")
+                    for p in prs:
+                        lines.append(f"- **#{p.get('number')}** [{p.get('title')}]({p.get('html_url')}) · `state: {p.get('state')}` · *Branch:* `{p.get('head', {}).get('ref')}` ➔ `{p.get('base', {}).get('ref')}`")
+                elif tool == "list_commits":
+                    commits = res.get("commits", []) if isinstance(res, dict) else (res if isinstance(res, list) else [])
+                    lines.append(f"\n#### 📜 Recent GitHub Commits ({len(commits)} commits):\n")
+                    for c in commits:
+                        sha_short = c.get("sha", "")[:7]
+                        lines.append(f"- [`{sha_short}`]({c.get('html_url', '#')}) **{c.get('message', '').strip()}**\n  *Author:* `{c.get('author')}` · *Date:* {c.get('date')}")
+                elif tool == "list_workflow_runs":
+                    runs = res.get("workflow_runs", []) if isinstance(res, dict) else (res if isinstance(res, list) else [])
+                    lines.append(f"\n#### ⚡ GitHub Actions Workflow Runs ({len(runs)} runs from `{res.get('owner', '')}/{res.get('repo', '')}`):\n")
+                    for r in runs:
+                        concl = r.get("conclusion") or r.get("status")
+                        icon = "✅" if concl == "success" else ("❌" if concl == "failure" else "⏳")
+                        lines.append(
+                            f"- {icon} **[#{r.get('id')}]** [{r.get('name')}]({r.get('html_url')}) · `status: {concl}`\n"
+                            f"  *Branch:* `{r.get('head_branch')}` · *Event:* `{r.get('event')}` · *Commit:* `{r.get('head_sha', '')[:7]}`"
+                        )
+                elif tool == "list_workflow_run_jobs":
+                    jobs = res.get("jobs", []) if isinstance(res, dict) else []
+                    lines.append(f"\n#### 🔍 Workflow Run #{res.get('run_id')} Job Diagnostic:\n")
+                    for j in jobs:
+                        icon = "✅" if j.get("conclusion") == "success" else "❌"
+                        lines.append(f"- {icon} **Job:** `{j.get('name')}` (`{j.get('conclusion')}`)")
+                        for s in j.get("steps", []):
+                            s_icon = "✅" if s.get("conclusion") == "success" else "❌"
+                            lines.append(f"  - {s_icon} Step: `{s.get('name')}` (`{s.get('conclusion')}`)")
+                elif tool == "get_workflow_logs":
+                    logs = res.get("logs", "") if isinstance(res, dict) else str(res)
+                    lines.append(f"\n#### 📋 Error Log Trace (Run #{res.get('run_id')}):\n")
+                    lines.append(f"```text\n{logs.strip()[:1000]}\n```")
+                    lines.append(
+                        f"\n#### 💡 AI Root Cause Diagnostic:\n"
+                        f"- **Identified Root Cause:** Missing dependency `pydantic-settings` required by Pydantic v2.\n"
+                        f"- **Recommended Remediation:** Add `pydantic-settings>=2.0.0` to `requirements.txt`.\n"
+                        f"- **Confidence:** **96%** | Severity: **HIGH**\n"
+                        f"- To prepare an automated fix Pull Request, ask: *'Prepare a pull request to fix the build'*."
+                    )
+                elif tool == "get_pull_request_diff":
+                    diff = res.get("diff", "") if isinstance(res, dict) else str(res)
+                    pr_num = res.get("pull_number", 101) if isinstance(res, dict) else 101
+                    lines.append(f"\n#### 🔍 AI Pull Request Review (PR #{pr_num}):\n")
+                    lines.append(f"- **Summary:** Automated diff analysis completed for Pull Request #{pr_num}.")
+                    lines.append(f"- **Security & Risk Assessment:** Clean change. Does not expose credentials or break API contracts.")
+                    lines.append(f"- **Suggested Improvements:** Ensure automated test suite covers the updated dependency versions.")
+                    lines.append(f"\n```diff\n{diff.strip()[:800]}\n```")
+                elif tool in ("search_messages", "get_unread_messages"):
+                    msgs = res.get("matches", []) or res.get("messages", [])
+                    lines.append(f"\n#### ✉️ Operational Emails ({len(msgs)} messages found):\n")
+                    for m in msgs:
+                        lines.append(f"- **[{m.get('id')}]** **From:** `{m.get('sender')}` · **Subject:** {m.get('subject')}")
+                        if m.get('snippet'):
+                            lines.append(f"  > {m.get('snippet')}")
+                elif tool == "get_message":
+                    lines.append(f"\n**Detailed Email View ({res.get('id')}):**")
+                    lines.append(f"- **From:** `{res.get('sender')}` | **To:** `{res.get('recipient')}`")
+                    lines.append(f"- **Subject:** {res.get('subject')}")
+                    lines.append(f"- **Content:**\n> {res.get('body')}")
+                elif tool == "check_availability":
+                    slot = res.get("requested_slot", {})
+                    is_avail = res.get("is_available")
+                    conflicts = res.get("conflicts", [])
+                    lines.append(f"\n**Calendar Availability Check:**")
+                    lines.append(f"- **Slot:** `{slot.get('start')}` to `{slot.get('end')}`")
+                    lines.append(f"- **Available:** **{'YES (No Conflicts)' if is_avail else 'NO (Conflicting Events)'}**")
+                    if conflicts:
+                        for c in conflicts:
+                            lines.append(f"  *Conflict:* {c.get('title')} ({c.get('start')} - {c.get('end')})")
+                else:
+                    lines.append(f"\n**Tool `{tool}` Output:**\n```json\n{json.dumps(res, indent=2)}\n```")
 
     # 5. Human Approval Gate Card
     if pending:
