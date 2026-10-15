@@ -798,8 +798,8 @@ async def generate_response_node(state: OpsAgentState) -> Dict[str, Any]:
                 res = raw_res.get("data") if isinstance(raw_res, dict) and "data" in raw_res and raw_res["data"] is not None else raw_res
                 if tool == "list_repositories":
                     repos = res.get("repositories", []) if isinstance(res, dict) else (res if isinstance(res, list) else [])
-                elif tool == "list_workflow_runs":
-                    runs = res.get("workflow_runs", []) if isinstance(res, dict) else (res if isinstance(res, list) else [])
+                elif tool in ("list_workflow_runs", "get_workflow_runs"):
+                    runs = res.get("runs", res.get("workflow_runs", [])) if isinstance(res, dict) else (res if isinstance(res, list) else [])
                 elif tool == "list_issues":
                     issues = res.get("issues", []) if isinstance(res, dict) else (res if isinstance(res, list) else [])
 
@@ -885,14 +885,14 @@ async def generate_response_node(state: OpsAgentState) -> Dict[str, Any]:
                     lines.append(f"\n#### 🔀 GitHub Pull Requests ({len(prs)} open in `{res.get('owner')}/{res.get('repo')}`):\n")
                     for p in prs:
                         lines.append(f"- **#{p.get('number')}** [{p.get('title')}]({p.get('html_url')}) · `state: {p.get('state')}` · *Branch:* `{p.get('head', {}).get('ref')}` ➔ `{p.get('base', {}).get('ref')}`")
-                elif tool == "list_commits":
+                elif tool in ("list_commits", "list_recent_commits"):
                     commits = res.get("commits", []) if isinstance(res, dict) else (res if isinstance(res, list) else [])
                     lines.append(f"\n#### 📜 Recent GitHub Commits ({len(commits)} commits):\n")
                     for c in commits:
                         sha_short = c.get("sha", "")[:7]
                         lines.append(f"- [`{sha_short}`]({c.get('html_url', '#')}) **{c.get('message', '').strip()}**\n  *Author:* `{c.get('author')}` · *Date:* {c.get('date')}")
-                elif tool == "list_workflow_runs":
-                    runs = res.get("workflow_runs", []) if isinstance(res, dict) else (res if isinstance(res, list) else [])
+                elif tool in ("list_workflow_runs", "get_workflow_runs"):
+                    runs = res.get("runs", res.get("workflow_runs", [])) if isinstance(res, dict) else (res if isinstance(res, list) else [])
                     lines.append(f"\n#### ⚡ GitHub Actions Workflow Runs ({len(runs)} runs from `{res.get('owner', '')}/{res.get('repo', '')}`):\n")
                     for r in runs:
                         concl = r.get("conclusion") or r.get("status")

@@ -65,7 +65,9 @@ SERVER_MAPPING = {
     "list_pull_requests": gh_mcp,
     "get_pull_request_details": gh_mcp,
     "get_pull_request_diff": gh_mcp,
+    "list_commits": gh_mcp,
     "list_recent_commits": gh_mcp,
+    "list_workflow_runs": gh_mcp,
     "get_workflow_runs": gh_mcp,
     "list_workflow_run_jobs": gh_mcp,
     "get_workflow_logs": gh_mcp,
@@ -140,13 +142,21 @@ class MCPToolRouter:
         Invokes an authorized tool via FastMCP.
         If write tool and approval_token is missing, returns structured APPROVAL_REQUIRED payload.
         """
-        server = SERVER_MAPPING.get(tool_name)
+        actual_tool = tool_name
+        actual_args = dict(arguments or {})
+        if tool_name == "list_workflow_runs":
+            actual_tool = "get_workflow_runs"
+            actual_args.pop("status", None)
+        elif tool_name == "list_commits":
+            actual_tool = "list_recent_commits"
+
+        server = SERVER_MAPPING.get(actual_tool)
         if not server:
             return {"error": f"Tool '{tool_name}' not recognized by any MCP server."}
 
         try:
             # Call tool on FastMCP instance
-            result = await server.call_tool(tool_name, arguments)
+            result = await server.call_tool(actual_tool, actual_args)
             
             # FastMCP call_tool returns result or Content list
             if hasattr(result, "content"):
