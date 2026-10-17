@@ -7,17 +7,20 @@ Supports both PostgreSQL (asyncpg) and SQLite (aiosqlite) for zero-setup local r
 import os
 import datetime
 from typing import List, Dict, Any, Optional
+from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy import String, Text, DateTime, ForeignKey, select, update, insert, func
 
 # Resolve absolute path to operational_data.db in project root so queries work from any working directory
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
+
 DEFAULT_DB_FILE = os.path.join(PROJECT_ROOT, "operational_data.db").replace("\\", "/")
 DEFAULT_DB_URL = os.getenv("OPS_DATABASE_URL", f"sqlite+aiosqlite:///{DEFAULT_DB_FILE}")
 
 def utc_now() -> datetime.datetime:
-    return datetime.datetime.now(datetime.timezone.utc)
+    return datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
 
 class Base(DeclarativeBase):
     pass
@@ -64,7 +67,11 @@ class DatabaseEntity(Base):
 class OperationsDatabase:
     def __init__(self, db_url: Optional[str] = None):
         self.db_url = db_url or DEFAULT_DB_URL
-        self.engine = create_async_engine(self.db_url, echo=False)
+        if "postgresql" in self.db_url:
+            from sqlalchemy.pool import NullPool
+            self.engine = create_async_engine(self.db_url, echo=False, poolclass=NullPool)
+        else:
+            self.engine = create_async_engine(self.db_url, echo=False)
         self.session_factory = async_sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)
 
     async def init_db(self):

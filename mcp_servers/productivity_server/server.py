@@ -27,16 +27,19 @@ if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
 from envelope import create_success_envelope, create_error_envelope
+from dotenv import load_dotenv
 
 mcp = FastMCP("opspilot-productivity-server")
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
+
 DEFAULT_DB_FILE = os.path.join(PROJECT_ROOT, "operational_data.db").replace("\\", "/")
 MAIL_DB_URL = os.getenv("OPS_DATABASE_URL", f"sqlite+aiosqlite:///{DEFAULT_DB_FILE}")
 APPROVAL_SECRET = os.getenv("OPSPILOT_APPROVAL_SECRET", "opspilot_trusted_approval_boundary_secret_key_32chars")
 
 def utc_now() -> datetime.datetime:
-    return datetime.datetime.now(datetime.timezone.utc)
+    return datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
 
 class ProductivityBase(DeclarativeBase):
     pass
@@ -69,7 +72,11 @@ class CalendarEvent(ProductivityBase):
 
 class ProductivityStore:
     def __init__(self, db_url: str):
-        self.engine = create_async_engine(db_url, echo=False)
+        if "postgresql" in db_url:
+            from sqlalchemy.pool import NullPool
+            self.engine = create_async_engine(db_url, echo=False, poolclass=NullPool)
+        else:
+            self.engine = create_async_engine(db_url, echo=False)
         self.session_factory = async_sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)
 
     async def init_db(self):
@@ -130,8 +137,8 @@ class ProductivityStore:
                 id="EVT-901",
                 title="Daily Operations Standup",
                 description="Daily operational review of active incidents and CI/CD status.",
-                start_time=datetime.datetime.combine(tomorrow, datetime.time(10, 0), tzinfo=datetime.timezone.utc),
-                end_time=datetime.datetime.combine(tomorrow, datetime.time(10, 30), tzinfo=datetime.timezone.utc),
+                start_time=datetime.datetime.combine(tomorrow, datetime.time(10, 0)),
+                end_time=datetime.datetime.combine(tomorrow, datetime.time(10, 30)),
                 attendees=json.dumps(["ops-team@enterprise.internal", "oncall@enterprise.internal"]),
                 calendar_id="primary",
                 status="confirmed"
@@ -140,8 +147,8 @@ class ProductivityStore:
                 id="EVT-902",
                 title="Incident INC-101 Postmortem Review",
                 description="Root cause analysis of auth service connection pool exhaustion.",
-                start_time=datetime.datetime.combine(tomorrow, datetime.time(15, 0), tzinfo=datetime.timezone.utc),
-                end_time=datetime.datetime.combine(tomorrow, datetime.time(16, 0), tzinfo=datetime.timezone.utc),
+                start_time=datetime.datetime.combine(tomorrow, datetime.time(15, 0)),
+                end_time=datetime.datetime.combine(tomorrow, datetime.time(16, 0)),
                 attendees=json.dumps(["aditya.b@enterprise.internal", "cto@enterprise.internal", "eng-leads@enterprise.internal"]),
                 calendar_id="primary",
                 status="confirmed"
