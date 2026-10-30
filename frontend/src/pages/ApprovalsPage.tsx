@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ShieldCheck, RefreshCw } from 'lucide-react';
+import { ShieldCheck, RefreshCw, Trash2, CheckCircle2, AlertCircle, X } from 'lucide-react';
 import { api } from '../services/api';
 import { ApprovalCard } from '../components/ApprovalCard';
 import { ApprovalRequest } from '../types';
@@ -9,13 +9,15 @@ export const ApprovalsPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'pending' | 'all'>('pending');
   const [systemFilter, setSystemFilter] = useState<string>('all');
+  const [notification, setNotification] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+  const [purging, setPurging] = useState(false);
 
   const fetchApprovals = async () => {
     try {
       setLoading(true);
       const data = await api.getApprovals();
       setApprovals(data);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to fetch approvals:', err);
     } finally {
       setLoading(false);
@@ -41,15 +43,77 @@ export const ApprovalsPage: React.FC = () => {
   }, []);
 
   const handleApprove = async (id: string) => {
-    setLoading(true);
-    await api.approveAction(id);
-    await fetchApprovals();
+    try {
+      setLoading(true);
+      const res = await api.approveAction(id);
+      setNotification({
+        text: res.message || 'Action authorized and executed successfully!',
+        type: 'success'
+      });
+    } catch (err: any) {
+      const errMsg = err?.response?.data?.detail || err.message || 'Action approval failed.';
+      setNotification({
+        text: errMsg,
+        type: 'error'
+      });
+    } finally {
+      await fetchApprovals();
+    }
   };
 
   const handleReject = async (id: string, reason?: string) => {
-    setLoading(true);
-    await api.rejectAction(id, reason);
-    await fetchApprovals();
+    try {
+      setLoading(true);
+      await api.rejectAction(id, reason);
+      setNotification({
+        text: 'Action rejected. No changes made to external systems.',
+        type: 'success'
+      });
+    } catch (err: any) {
+      const errMsg = err?.response?.data?.detail || err.message || 'Failed to reject action.';
+      setNotification({
+        text: errMsg,
+        type: 'error'
+      });
+    } finally {
+      await fetchApprovals();
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    try {
+      await api.deleteApproval(id);
+      setNotification({
+        text: 'Approval record removed.',
+        type: 'success'
+      });
+      await fetchApprovals();
+    } catch (err: any) {
+      const errMsg = err?.response?.data?.detail || err.message || 'Failed to remove approval record.';
+      setNotification({
+        text: errMsg,
+        type: 'error'
+      });
+    }
+  };
+
+  const handlePurge = async () => {
+    try {
+      setPurging(true);
+      const res = await api.purgeApprovals();
+      setNotification({
+        text: res.message || 'Purged inactive approval records.',
+        type: 'success'
+      });
+      await fetchApprovals();
+    } catch (err: any) {
+      setNotification({
+        text: err?.response?.data?.detail || 'Failed to purge inactive records.',
+        type: 'error'
+      });
+    } finally {
+      setPurging(false);
+    }
   };
 
   const filteredApprovals = approvals.filter((a) => {
@@ -59,9 +123,31 @@ export const ApprovalsPage: React.FC = () => {
   });
 
   const pendingCount = approvals.filter((a) => a.approval_status === 'pending').length;
+  const inactiveCount = approvals.filter((a) => ['expired', 'failed', 'rejected', 'superseded'].includes(a.approval_status)).length;
 
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+      {/* Notification Toast */}
+      {notification && (
+        <div className={`p-4 rounded-xl border flex items-center justify-between text-xs font-semibold ${
+          notification.type === 'success' 
+            ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' 
+            : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+        }`}>
+          <div className="flex items-center gap-2">
+            {notification.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            ) : (
+              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+            )}
+            <span>{notification.text}</span>
+          </div>
+          <button onClick={() => setNotification(null)} className="p-1 hover:opacity-75">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Title Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -78,13 +164,26 @@ export const ApprovalsPage: React.FC = () => {
           </p>
         </div>
 
-        <button
-          onClick={fetchApprovals}
-          className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:bg-slate-800 transition-colors self-start sm:self-auto"
-        >
-          <RefreshCw className="w-3.5 h-3.5" />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2 self-start sm:self-auto">
+          {inactiveCount > 0 && (
+            <button
+              onClick={handlePurge}
+              disabled={purging}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-rose-500/10 border border-rose-500/30 text-rose-300 hover:bg-rose-500/20 transition-all disabled:opacity-50"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Purge Inactive ({inactiveCount})</span>
+            </button>
+          )}
+
+          <button
+            onClick={fetchApprovals}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* Tabs & Filters */}
@@ -157,6 +256,7 @@ export const ApprovalsPage: React.FC = () => {
               approval={approval}
               onApprove={handleApprove}
               onReject={handleReject}
+              onDelete={handleDelete}
             />
           ))}
         </div>

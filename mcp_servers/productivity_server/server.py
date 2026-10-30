@@ -26,8 +26,12 @@ if current_dir not in sys.path:
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
+import asyncio
+import logging
 from envelope import create_success_envelope, create_error_envelope
 from dotenv import load_dotenv
+
+logger = logging.getLogger("opspilot.productivity_server")
 
 mcp = FastMCP("opspilot-productivity-server")
 
@@ -184,13 +188,17 @@ def verify_approval_token(
         nonce, timestamp_str, token_action_hash, signature = parts
         
         token_time = int(timestamp_str)
-        now = int(utc_now().timestamp())
+        now = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
         if now - token_time > 900 or token_time - now > 60:
             return False
 
         actual_hash = compute_action_hash(tool_name, args)
         if not hmac.compare_digest(actual_hash, token_action_hash):
-            return False
+            # Check with None values stripped in case caller omitted optional parameters
+            stripped_args = {k: v for k, v in args.items() if v is not None}
+            stripped_hash = compute_action_hash(tool_name, stripped_args)
+            if not hmac.compare_digest(stripped_hash, token_action_hash):
+                return False
 
         canonical = f"{tool_name}:{workspace_id}:{nonce}:{timestamp_str}:{token_action_hash}"
         expected_sig = hmac.new(
@@ -464,10 +472,38 @@ async def send_email(
         )
 
     try:
+        smtp_user = os.getenv("SMTP_USER", "").strip()
+        smtp_pass = os.getenv("SMTP_PASSWORD", "").replace(" ", "").strip()
+        smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com").strip()
+        smtp_port = int(os.getenv("SMTP_PORT", "587"))
+        smtp_from = os.getenv("SMTP_FROM_EMAIL", smtp_user or "ops-assistant@enterprise.internal").strip()
+
+        # If live SMTP credentials are configured, dispatch real email
+        is_live_smtp = bool(smtp_user and smtp_pass and not os.getenv("PYTEST_CURRENT_TEST"))
+        if is_live_smtp:
+            import smtplib
+            from email.mime.text import MIMEText
+            from email.mime.multipart import MIMEMultipart
+
+            def _dispatch():
+                msg = MIMEMultipart()
+                msg["From"] = smtp_from
+                msg["To"] = recipient
+                msg["Subject"] = subject
+                msg.attach(MIMEText(body, "plain"))
+
+                with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as s:
+                    s.starttls()
+                    s.login(smtp_user, smtp_pass)
+                    s.send_message(msg)
+
+            await asyncio.to_thread(_dispatch)
+            logger.info(f"Live SMTP email sent successfully to {recipient} via {smtp_host}")
+
         msg_id = f"MSG-{uuid.uuid4().hex[:6].upper()}"
         sent_msg = EmailMessage(
             id=msg_id,
-            sender="ops-assistant@enterprise.internal",
+            sender=smtp_from if is_live_smtp else "ops-assistant@enterprise.internal",
             recipient=recipient,
             subject=subject,
             body=body,
@@ -491,7 +527,8 @@ async def send_email(
                 "recipient": recipient,
                 "subject": subject,
                 "sent_at": utc_now().isoformat() + "Z",
-                "delivered": True
+                "delivered": True,
+                "delivery_mode": "live_smtp" if is_live_smtp else "operational_store"
             },
             resource_ids_urls=[msg_id]
         )

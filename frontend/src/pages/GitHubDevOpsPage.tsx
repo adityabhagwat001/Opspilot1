@@ -15,7 +15,12 @@ import {
   Play,
   Terminal,
   FileCode,
-  ArrowRight
+  ArrowRight,
+  KeyRound,
+  Eye,
+  EyeOff,
+  X,
+  Trash2
 } from 'lucide-react';
 import { api } from '../services/api';
 import { 
@@ -47,6 +52,60 @@ export const GitHubDevOpsPage: React.FC = () => {
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
   const [selectedFailure, setSelectedFailure] = useState<WorkflowFailureItem | null>(null);
+
+  // Connect Another GitHub Profile Modal State
+  const [isConnectModalOpen, setIsConnectModalOpen] = useState(false);
+  const [connectUsername, setConnectUsername] = useState('');
+  const [connectToken, setConnectToken] = useState('');
+  const [connectDefaultRepo, setConnectDefaultRepo] = useState('');
+  const [showToken, setShowToken] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const [connectError, setConnectError] = useState<string | null>(null);
+
+  const handleConnectSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!connectToken.trim()) return;
+    setConnecting(true);
+    setConnectError(null);
+    try {
+      const res = await api.connectGitHub({
+        token: connectToken.trim(),
+        username: connectUsername.trim() || undefined,
+        default_repo: connectDefaultRepo.trim() || undefined
+      });
+      setIsConnectModalOpen(false);
+      setConnectToken('');
+      setConnectUsername('');
+      setConnectDefaultRepo('');
+      setStatusMessage({
+        text: res.message || `Connected to GitHub account @${res.account.login} in real-time!`,
+        type: 'success'
+      });
+      await loadAllData(false);
+    } catch (err: any) {
+      setConnectError(err?.response?.data?.detail || err.message || 'GitHub authentication failed.');
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  const handleDisconnect = async () => {
+    if (!window.confirm('Disconnect your active GitHub account?')) return;
+    setConnecting(true);
+    try {
+      await api.disconnectGitHub();
+      setIsConnectModalOpen(false);
+      setStatusMessage({
+        text: 'GitHub account disconnected.',
+        type: 'success'
+      });
+      await loadAllData(false);
+    } catch (err: any) {
+      alert(`Disconnect failed: ${err?.response?.data?.detail || err.message}`);
+    } finally {
+      setConnecting(false);
+    }
+  };
 
   const loadAllData = async (showLoading = true) => {
     if (showLoading) setLoading(true);
@@ -237,6 +296,46 @@ export const GitHubDevOpsPage: React.FC = () => {
     }
   };
 
+  const handleDeleteProposal = async (proposalId: string) => {
+    setActionLoadingId(`del-prop-${proposalId}`);
+    try {
+      await api.deleteGitHubProposal(proposalId);
+      setProposals(prev => (prev || []).filter(p => p.id !== proposalId));
+      setStatusMessage({
+        text: 'Fix proposal removed successfully.',
+        type: 'success'
+      });
+    } catch (err: any) {
+      setStatusMessage({
+        text: `Failed to remove proposal: ${err?.response?.data?.detail || err.message}`,
+        type: 'error'
+      });
+    } finally {
+      setActionLoadingId(null);
+      setTimeout(() => setStatusMessage(null), 4000);
+    }
+  };
+
+  const handleDeleteFailure = async (failureId: string) => {
+    setActionLoadingId(`del-fail-${failureId}`);
+    try {
+      await api.deleteGitHubFailure(failureId);
+      setFailures(prev => (prev || []).filter(f => f.id !== failureId));
+      setStatusMessage({
+        text: 'Failure record dismissed successfully.',
+        type: 'success'
+      });
+    } catch (err: any) {
+      setStatusMessage({
+        text: `Failed to dismiss failure: ${err?.response?.data?.detail || err.message}`,
+        type: 'error'
+      });
+    } finally {
+      setActionLoadingId(null);
+      setTimeout(() => setStatusMessage(null), 4000);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
@@ -248,11 +347,17 @@ export const GitHubDevOpsPage: React.FC = () => {
     );
   }
 
-  const safeFailures = failures || [];
-  const safeRepos = repositories || [];
-  const safeProposals = proposals || [];
-  const safeEvents = events || [];
-  const safeNotifications = notifications || [];
+  // Filter out any mock/fake enterprise-ops entries and broken mock run IDs
+  const safeFailures = (failures || []).filter(f => !f.repo_full_name?.includes('enterprise-ops'));
+  const safeRepos = (repositories || []).filter(r => !r.full_name?.includes('enterprise-ops') && !r.name?.includes('enterprise-ops'));
+  const safeProposals = (proposals || []).filter(p => !p.repo_full_name?.includes('enterprise-ops') && !p.repo_name?.includes('enterprise-ops'));
+  const safeEvents = (events || []).filter(e => !e.repo_full_name?.includes('enterprise-ops'));
+  const safeNotifications = (notifications || []).filter(
+    n => !n.message?.includes('enterprise-ops') && 
+         !n.title?.includes('enterprise-ops') && 
+         !n.message?.includes('#38558137') && 
+         !n.message?.includes('#26776825')
+  );
 
   const activeFailuresCount = safeFailures.filter(f => f.status === 'detected' || f.status === 'analyzed').length;
   const unreadNotifsCount = safeNotifications.filter(n => !n.is_read).length;
@@ -298,7 +403,7 @@ export const GitHubDevOpsPage: React.FC = () => {
                     ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' 
                     : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
                 }`}>
-                  {account?.status === 'mock_sandbox' ? 'Mock Sandbox Mode' : (account?.connected ? 'Live Connected' : 'Disconnected')}
+                  {account?.connected ? 'Live Connected' : 'Disconnected'}
                 </span>
               </div>
               <p className="text-xs text-slate-400 mt-1">
@@ -339,7 +444,11 @@ export const GitHubDevOpsPage: React.FC = () => {
             )}
             <div>
               <div className="flex items-center gap-2">
-                <span className="font-bold text-white text-sm">{account?.name || account?.login || 'enterprise-ops'}</span>
+                <span className="font-bold text-white text-sm">
+                  {account?.connected 
+                    ? (account.name || `@${account.login}`) 
+                    : 'No GitHub Account Connected'}
+                </span>
                 {account?.html_url && (
                   <a 
                     href={account.html_url} 
@@ -352,12 +461,14 @@ export const GitHubDevOpsPage: React.FC = () => {
                 )}
               </div>
               <p className="text-[11px] text-slate-400 font-mono">
-                {account?.login ? `@${account.login}` : 'enterprise-ops'} • {account?.public_repos ?? 12} Public Repositories
+                {account?.connected 
+                  ? `@${account.login} • ${account.public_repos ?? 0} Public Repositories`
+                  : 'Click "Switch / Connect Profile" to connect your GitHub account'}
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-4 text-xs font-mono">
+          <div className="flex flex-wrap items-center gap-4 text-xs font-mono">
             <div>
               <span className="text-slate-500">OAuth Scopes:</span>{' '}
               <span className="text-purple-300">
@@ -368,6 +479,18 @@ export const GitHubDevOpsPage: React.FC = () => {
             <div className="text-slate-400">
               {account?.note || 'Verified FastMCP Gateway'}
             </div>
+            <div className="hidden sm:block text-slate-700">|</div>
+            <button
+              onClick={() => {
+                setConnectError(null);
+                setIsConnectModalOpen(true);
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-300 hover:text-emerald-200 transition-all shadow-sm"
+              title="Connect another GitHub account with real-time verification"
+            >
+              <KeyRound className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Switch / Connect Profile</span>
+            </button>
           </div>
         </div>
       </div>
@@ -694,6 +817,16 @@ export const GitHubDevOpsPage: React.FC = () => {
                         <ShieldCheck className={`w-3.5 h-3.5 ${isProposing ? 'animate-spin' : ''}`} />
                         <span>{isProposing ? 'Generating...' : 'Propose AI Code Fix'}</span>
                       </button>
+
+                      <button
+                        onClick={() => handleDeleteFailure(failure.id)}
+                        disabled={actionLoadingId === `del-fail-${failure.id}`}
+                        className="flex items-center justify-center gap-1 px-3 py-1.5 rounded-xl text-xs font-medium text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 border border-slate-800 hover:border-rose-500/30 transition-colors"
+                        title="Dismiss and remove this failure record"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Dismiss</span>
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -708,15 +841,16 @@ export const GitHubDevOpsPage: React.FC = () => {
         <div className="space-y-6">
           {safeProposals.length === 0 ? (
             <div className="glass-panel p-12 text-center rounded-2xl border border-slate-800 space-y-3">
-              <ShieldCheck className="w-12 h-12 text-amber-400 mx-auto" />
+              <ShieldCheck className="w-12 h-12 text-emerald-400 mx-auto" />
               <h3 className="text-base font-bold text-white">No Fix Proposals Pending</h3>
               <p className="text-xs text-slate-400 max-w-md mx-auto">
-                OpsPilot generates isolated patch proposals when CI/CD failures are analyzed. Use the "Propose AI Code Fix" button on any detected failure.
+                All monitored repositories for {account?.login ? `@${account.login}` : 'your account'} are healthy and operational. OpsPilot generates patch proposals when real CI/CD failures are diagnosed.
               </p>
             </div>
           ) : (
             safeProposals.map(proposal => {
               const isExecuting = actionLoadingId === `exec-${proposal.id}`;
+              const isValidPr = proposal.pr_url && !proposal.pr_url.includes('enterprise-ops') && proposal.pr_url.startsWith('https://github.com/');
 
               return (
                 <div key={proposal.id} className="glass-panel p-6 rounded-2xl border border-slate-800 space-y-4">
@@ -736,9 +870,9 @@ export const GitHubDevOpsPage: React.FC = () => {
                         {proposal.description}
                       </p>
                       <div className="flex flex-wrap items-center gap-3 text-xs font-mono text-slate-400 pt-1">
-                        <span>Target Repo: <strong className="text-white">{proposal.repo_name}</strong></span>
+                        <span>Target Repo: <strong className="text-white">{proposal.repo_name || proposal.repo_full_name}</strong></span>
                         <span>Fix Branch: <code className="text-purple-300">{proposal.branch_name}</code></span>
-                        {proposal.pr_url && (
+                        {isValidPr && (
                           <a 
                             href={proposal.pr_url} 
                             target="_blank" 
@@ -776,7 +910,7 @@ export const GitHubDevOpsPage: React.FC = () => {
                         </>
                       )}
 
-                      {proposal.status === 'applied' && proposal.pr_url && (
+                      {proposal.status === 'applied' && isValidPr && (
                         <a
                           href={proposal.pr_url}
                           target="_blank"
@@ -788,6 +922,16 @@ export const GitHubDevOpsPage: React.FC = () => {
                           <ExternalLink className="w-3 h-3" />
                         </a>
                       )}
+
+                      <button
+                        onClick={() => handleDeleteProposal(proposal.id)}
+                        disabled={actionLoadingId === `del-prop-${proposal.id}`}
+                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 border border-slate-800 hover:border-rose-500/30 transition-colors"
+                        title="Dismiss and remove this fix proposal"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span className="hidden sm:inline">Dismiss</span>
+                      </button>
                     </div>
                   </div>
 
@@ -934,6 +1078,144 @@ export const GitHubDevOpsPage: React.FC = () => {
               })}
             </div>
           )}
+        </div>
+      )}
+      {/* =========================================================================
+          CONNECT / SWITCH GITHUB ACCOUNT MODAL
+      ========================================================================= */}
+      {isConnectModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fade-in">
+          <div className="glass-panel w-full max-w-lg p-6 rounded-2xl border border-slate-700/80 shadow-2xl space-y-5 bg-[#0b1120]">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-purple-500/20 text-purple-400 border border-purple-500/30 flex items-center justify-center">
+                  <GitBranch className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Connect Another GitHub Profile</h3>
+                  <p className="text-xs text-slate-400">Real-time authentication and live repository discovery</p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setIsConnectModalOpen(false);
+                  setConnectError(null);
+                }}
+                className="p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {connectError && (
+              <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300 flex items-start gap-2.5">
+                <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                <span className="flex-1">{connectError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleConnectSubmit} className="space-y-4 text-xs">
+              <div>
+                <label className="block text-slate-300 font-medium mb-1">
+                  GitHub Username or Email <span className="text-rose-400">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={connectUsername}
+                  onChange={(e) => setConnectUsername(e.target.value)}
+                  required
+                  placeholder="e.g. adityabhagwat001 or adityabhagwat2181@gmail.com"
+                  className="w-full bg-slate-900 border border-slate-800 focus:border-emerald-500 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-slate-300 font-medium">
+                    GitHub Password or Personal Access Token <span className="text-rose-400">*</span>
+                  </label>
+                  <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20">
+                    Real-Time Auth
+                  </span>
+                </div>
+                <div className="relative">
+                  <input
+                    type={showToken ? "text" : "password"}
+                    value={connectToken}
+                    onChange={(e) => setConnectToken(e.target.value)}
+                    required
+                    placeholder="Enter your GitHub account password or token"
+                    className="w-full bg-slate-900 border border-slate-800 focus:border-emerald-500 rounded-xl pl-3.5 pr-10 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowToken(!showToken)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
+                  >
+                    {showToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                  Log in directly using your GitHub username/email & password, or use a personal access token.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-slate-300 font-medium mb-1">
+                  Default Repository Name <span className="text-slate-500 font-normal">(Optional, will auto-select latest repo)</span>
+                </label>
+                <input
+                  type="text"
+                  value={connectDefaultRepo}
+                  onChange={(e) => setConnectDefaultRepo(e.target.value)}
+                  placeholder="e.g. SafeHer or auth-service"
+                  className="w-full bg-slate-900 border border-slate-800 focus:border-emerald-500 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none"
+                />
+              </div>
+
+              <div className="pt-2 flex items-center justify-between gap-3">
+                {account?.connected && (
+                  <button
+                    type="button"
+                    onClick={handleDisconnect}
+                    disabled={connecting}
+                    className="px-3.5 py-2 rounded-xl text-xs font-semibold text-rose-400 hover:bg-rose-500/10 border border-rose-500/20 transition-colors"
+                  >
+                    Disconnect Current
+                  </button>
+                )}
+                <div className="flex items-center gap-2.5 ml-auto">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsConnectModalOpen(false);
+                      setConnectError(null);
+                    }}
+                    className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white hover:bg-slate-850 border border-slate-800 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={connecting || !connectToken.trim()}
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-emerald-500 text-slate-950 hover:bg-emerald-400 disabled:opacity-40 transition-all shadow-md shadow-emerald-500/20"
+                  >
+                    {connecting ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Verifying with GitHub in Real-Time...</span>
+                      </>
+                    ) : (
+                      <>
+                        <ShieldCheck className="w-3.5 h-3.5" />
+                        <span>Verify & Connect Profile</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
         </div>
       )}
     </div>

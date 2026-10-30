@@ -1,16 +1,17 @@
 """
 Approval Center Endpoints
-Enforces human authorization decisions, parameter verification, workspace isolation, and execution.
+Enforces human authorization decisions, parameter verification, workspace isolation, execution, and lifecycle pruning.
 """
 
 import json
+import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, update, delete
 from app.core.db import get_db
 from app.auth.deps import get_current_user, require_role, get_current_workspace_member
-from app.models.models import User, ApprovalRequest, WorkspaceMember
+from app.models.models import User, ApprovalRequest, ConsumedApprovalToken, WorkspaceMember
 from app.schemas.schemas import ApprovalDecisionRequest
 from app.approvals.approval_service import approval_service
 
@@ -23,6 +24,19 @@ async def list_approvals(
     user: User = Depends(get_current_user),
     member: WorkspaceMember = Depends(get_current_workspace_member)
 ):
+    now = datetime.datetime.now(datetime.timezone.utc)
+    # Automatically mark past-due pending requests as expired so stale items never appear active
+    await db.execute(
+        update(ApprovalRequest)
+        .where(
+            ApprovalRequest.workspace_id == member.workspace_id,
+            ApprovalRequest.approval_status == "pending",
+            ApprovalRequest.expires_at < now
+        )
+        .values(approval_status="expired")
+    )
+    await db.commit()
+
     query = (
         select(ApprovalRequest)
         .where(ApprovalRequest.workspace_id == member.workspace_id)
@@ -94,7 +108,6 @@ async def approve_request(
     Approves the exact proposed write action and executes it with an issued cryptographic token.
     Enforces workspace membership and role restrictions.
     """
-    # Verify approval exists and belongs to the caller's workspace
     check_stmt = select(ApprovalRequest).where(
         ApprovalRequest.id == approval_id,
         ApprovalRequest.workspace_id == member.workspace_id
@@ -140,3 +153,48 @@ async def reject_request(
     if res.get("status") == "ERROR":
         raise HTTPException(status_code=400, detail=res.get("error"))
     return res
+
+@router.delete("/{approval_id}")
+async def delete_approval(
+    approval_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_role(["admin", "operator"])),
+    member: WorkspaceMember = Depends(get_current_workspace_member)
+):
+    """
+    Deletes an individual approval request record and its consumed tokens.
+    """
+    stmt = select(ApprovalRequest).where(
+        ApprovalRequest.id == approval_id,
+        ApprovalRequest.workspace_id == member.workspace_id
+    )
+    req = (await db.execute(stmt)).scalar_one_or_none()
+    if not req:
+        raise HTTPException(status_code=404, detail="Approval request not found.")
+
+    await db.execute(delete(ConsumedApprovalToken).where(ConsumedApprovalToken.approval_id == approval_id))
+    await db.delete(req)
+    await db.commit()
+    return {"status": "SUCCESS", "message": f"Approval {approval_id} removed."}
+
+@router.post("/purge")
+async def purge_approvals(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_role(["admin", "operator"])),
+    member: WorkspaceMember = Depends(get_current_workspace_member)
+):
+    """
+    Purges all inactive, expired, failed, or rejected approvals in the workspace.
+    """
+    stmt = select(ApprovalRequest).where(
+        ApprovalRequest.workspace_id == member.workspace_id,
+        ApprovalRequest.approval_status.in_(["expired", "failed", "rejected", "superseded"])
+    )
+    res = await db.execute(stmt)
+    stale_list = res.scalars().all()
+    count = len(stale_list)
+    for a in stale_list:
+        await db.execute(delete(ConsumedApprovalToken).where(ConsumedApprovalToken.approval_id == a.id))
+        await db.delete(a)
+    await db.commit()
+    return {"status": "SUCCESS", "purged_count": count, "message": f"Purged {count} inactive approval requests."}

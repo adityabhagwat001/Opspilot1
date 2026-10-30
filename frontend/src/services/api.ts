@@ -58,13 +58,28 @@ export const api = {
     return res.data;
   },
 
-  getConversations: async () => {
+  getConversations: async (): Promise<Array<{ id: string; title: string; created_at: string; updated_at: string }>> => {
     const res = await apiClient.get('/chat/conversations');
     return res.data;
   },
 
   getMessages: async (conversationId: string) => {
     const res = await apiClient.get(`/chat/conversations/${conversationId}/messages`);
+    return res.data;
+  },
+
+  createConversation: async (title?: string) => {
+    const res = await apiClient.post('/chat/conversations', { title: title || 'New Chat' });
+    return res.data;
+  },
+
+  deleteConversation: async (conversationId: string) => {
+    const res = await apiClient.delete(`/chat/conversations/${conversationId}`);
+    return res.data;
+  },
+
+  updateConversationTitle: async (conversationId: string, title: string) => {
+    const res = await apiClient.patch(`/chat/conversations/${conversationId}`, { title });
     return res.data;
   },
 
@@ -90,6 +105,16 @@ export const api = {
     const res = await apiClient.post(`/approvals/${approvalId}/reject`, { reason });
     return res.data;
   },
+  deleteApproval: async (approvalId: string) => {
+    const res = await apiClient.delete(`/approvals/${approvalId}`);
+    return res.data;
+  },
+
+  purgeApprovals: async () => {
+    const res = await apiClient.post('/approvals/purge');
+    return res.data;
+  },
+
 
   // Integrations
   getIntegrations: async (): Promise<{ integrations: Integration[]; total_tools: number }> => {
@@ -108,9 +133,23 @@ export const api = {
     return res.data;
   },
 
-  // GitHub Intelligence & DevOps
   getGitHubAccount: async (): Promise<GitHubAccount> => {
     const res = await apiClient.get('/github/account');
+    return res.data;
+  },
+
+  connectGitHub: async (payload: { token: string; username?: string; default_repo?: string }): Promise<{
+    success: boolean;
+    message: string;
+    account: GitHubAccount;
+    repositories: GitHubRepository[];
+  }> => {
+    const res = await apiClient.post('/github/connect', payload);
+    return res.data;
+  },
+
+  disconnectGitHub: async (): Promise<{ success: boolean; message: string; account: GitHubAccount }> => {
+    const res = await apiClient.post('/github/disconnect');
     return res.data;
   },
 
@@ -201,6 +240,16 @@ export const api = {
     message: string;
   }> => {
     const res = await apiClient.post(`/github/proposals/${proposalId}/execute`);
+    return res.data;
+  },
+
+  deleteGitHubProposal: async (proposalId: string): Promise<{ status: string; deleted_id: string }> => {
+    const res = await apiClient.delete(`/github/proposals/${proposalId}`);
+    return res.data;
+  },
+
+  deleteGitHubFailure: async (failureId: string): Promise<{ status: string; deleted_id: string }> => {
+    const res = await apiClient.delete(`/github/failures/${failureId}`);
     return res.data;
   },
 

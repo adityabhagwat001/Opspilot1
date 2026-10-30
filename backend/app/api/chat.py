@@ -10,7 +10,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from app.core.db import get_db
 from app.auth.deps import get_current_user, get_current_workspace_member
 from app.models.models import (
@@ -20,6 +20,7 @@ from app.models.models import (
     AgentExecution,
     ExecutionStep,
     ApprovalRequest,
+    ConsumedApprovalToken,
     WorkspaceMember
 )
 from app.schemas.schemas import ChatMessageRequest
@@ -95,6 +96,114 @@ async def get_messages(
         for m in msgs
     ]
 
+@router.post("/conversations")
+async def create_conversation(
+    payload: dict = {},
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+    member: WorkspaceMember = Depends(get_current_workspace_member)
+):
+    """
+    Creates a new conversation session for the user.
+    """
+    now = datetime.datetime.now(datetime.timezone.utc)
+    title = (payload.get("title") or "New Chat").strip()[:100]
+    conv = AgentConversation(
+        user_id=user.id,
+        workspace_id=member.workspace_id,
+        title=title,
+        created_at=now,
+        updated_at=now
+    )
+    db.add(conv)
+    await db.commit()
+    await db.refresh(conv)
+    return {
+        "id": conv.id,
+        "title": conv.title,
+        "created_at": conv.created_at.isoformat() + "Z",
+        "updated_at": conv.updated_at.isoformat() + "Z"
+    }
+
+@router.delete("/conversations/{conversation_id}")
+async def delete_conversation(
+    conversation_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+    member: WorkspaceMember = Depends(get_current_workspace_member)
+):
+    """
+    Deletes a conversation and all its messages, executions, and execution steps.
+    """
+    conv_stmt = select(AgentConversation).where(
+        AgentConversation.id == conversation_id,
+        AgentConversation.user_id == user.id
+    )
+    conv = (await db.execute(conv_stmt)).scalar_one_or_none()
+    if not conv:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found or access denied."
+        )
+
+    # 1. Clean up execution dependencies
+    exec_stmt = select(AgentExecution.id).where(AgentExecution.conversation_id == conversation_id)
+    exec_ids = (await db.execute(exec_stmt)).scalars().all()
+    if exec_ids:
+        # Delete execution steps
+        await db.execute(delete(ExecutionStep).where(ExecutionStep.execution_id.in_(exec_ids)))
+        # Clean up approval requests and tokens if any
+        appr_stmt = select(ApprovalRequest.id).where(ApprovalRequest.execution_id.in_(exec_ids))
+        appr_ids = (await db.execute(appr_stmt)).scalars().all()
+        if appr_ids:
+            await db.execute(delete(ConsumedApprovalToken).where(ConsumedApprovalToken.approval_id.in_(appr_ids)))
+            await db.execute(delete(ApprovalRequest).where(ApprovalRequest.id.in_(appr_ids)))
+        await db.execute(delete(AgentExecution).where(AgentExecution.id.in_(exec_ids)))
+
+    # 2. Delete messages
+    await db.execute(delete(AgentMessage).where(AgentMessage.conversation_id == conversation_id))
+
+    # 3. Delete conversation
+    await db.delete(conv)
+    await db.commit()
+    return {"success": True, "message": "Conversation deleted successfully", "id": conversation_id}
+
+@router.patch("/conversations/{conversation_id}")
+async def update_conversation_title(
+    conversation_id: str,
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+    member: WorkspaceMember = Depends(get_current_workspace_member)
+):
+    """
+    Updates a conversation title.
+    """
+    conv_stmt = select(AgentConversation).where(
+        AgentConversation.id == conversation_id,
+        AgentConversation.user_id == user.id
+    )
+    conv = (await db.execute(conv_stmt)).scalar_one_or_none()
+    if not conv:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found or access denied."
+        )
+
+    new_title = (payload.get("title") or "").strip()
+    if new_title:
+        conv.title = new_title[:100]
+        conv.updated_at = datetime.datetime.now(datetime.timezone.utc)
+        await db.commit()
+        await db.refresh(conv)
+
+    return {
+        "id": conv.id,
+        "title": conv.title,
+        "created_at": conv.created_at.isoformat() + "Z",
+        "updated_at": conv.updated_at.isoformat() + "Z"
+    }
+
 @router.post("/message")
 async def send_message(
     payload: ChatMessageRequest,
@@ -124,9 +233,12 @@ async def send_message(
             )
         conv.updated_at = now
     else:
+        clean_text = payload.message.strip().strip('"\'')
+        conv_title = clean_text[:48] + ("..." if len(clean_text) > 48 else "")
         conv = AgentConversation(
             user_id=user.id,
-            title=payload.message[:50] + ("..." if len(payload.message) > 50 else ""),
+            workspace_id=member.workspace_id,
+            title=conv_title or "Operational Chat",
             created_at=now,
             updated_at=now
         )

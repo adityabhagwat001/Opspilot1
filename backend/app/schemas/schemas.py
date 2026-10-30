@@ -27,3 +27,9 @@ class IntegrationStatusResponse(BaseModel):
     name: str
     tool_count: int
     last_sync_at: Optional[str] = None
+
+class GitHubConnectRequest(BaseModel):
+    token: str
+    username: Optional[str] = None
+    default_repo: Optional[str] = None
+

@@ -11,7 +11,9 @@ import {
   Calendar,
   ChevronDown,
   ChevronUp,
-  Loader2
+  Loader2,
+  Trash2,
+  Clock
 } from 'lucide-react';
 import { ApprovalRequest } from '../types';
 
@@ -19,6 +21,7 @@ interface ApprovalCardProps {
   approval: ApprovalRequest;
   onApprove: (id: string) => Promise<void>;
   onReject: (id: string, reason?: string) => Promise<void>;
+  onDelete?: (id: string) => Promise<void>;
   compact?: boolean;
 }
 
@@ -26,10 +29,12 @@ export const ApprovalCard: React.FC<ApprovalCardProps> = ({
   approval,
   onApprove,
   onReject,
+  onDelete,
   compact = false
 }) => {
   const [isApproving, setIsApproving] = useState(false);
   const [isRejecting, setIsRejecting] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [expanded, setExpanded] = useState(!compact);
   const [rejectReason, setRejectReason] = useState('');
   const [showRejectInput, setShowRejectInput] = useState(false);
@@ -63,9 +68,22 @@ export const ApprovalCard: React.FC<ApprovalCardProps> = ({
     }
   };
 
-  const isPending = approval.approval_status === 'pending';
-  const isApproved = approval.approval_status === 'approved';
-  const isRejected = approval.approval_status === 'rejected';
+  const handleDelete = async () => {
+    if (!onDelete) return;
+    try {
+      setIsDeleting(true);
+      await onDelete(approval.id);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const status = (approval.approval_status || 'pending').toLowerCase();
+  const isPending = status === 'pending';
+  const isApproved = status === 'approved' || status === 'succeeded';
+  const isRejected = status === 'rejected';
+  const isExpired = status === 'expired';
+  const isFailed = status === 'failed';
 
   return (
     <div className={`rounded-xl border transition-all ${
@@ -73,8 +91,10 @@ export const ApprovalCard: React.FC<ApprovalCardProps> = ({
         ? 'border-amber-500/40 bg-gradient-to-b from-amber-500/10 to-slate-900/90 shadow-lg shadow-amber-500/5' 
         : isApproved
         ? 'border-emerald-500/30 bg-slate-900/60'
-        : isRejected
+        : isRejected || isFailed
         ? 'border-rose-500/30 bg-slate-900/60'
+        : isExpired
+        ? 'border-slate-700 bg-slate-900/40 opacity-75'
         : 'border-slate-800 bg-slate-900/60'
     } p-5`}>
       {/* Header */}
@@ -94,6 +114,7 @@ export const ApprovalCard: React.FC<ApprovalCardProps> = ({
               <span className={`text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${
                 isPending ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' :
                 isApproved ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' :
+                isExpired ? 'bg-slate-700 text-slate-300 border border-slate-600' :
                 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
               }`}>
                 {approval.approval_status}
@@ -105,12 +126,24 @@ export const ApprovalCard: React.FC<ApprovalCardProps> = ({
           </div>
         </div>
 
-        <button 
-          onClick={() => setExpanded(!expanded)}
-          className="text-slate-400 hover:text-slate-200 p-1 rounded-md"
-        >
-          {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-        </button>
+        <div className="flex items-center gap-1.5">
+          {onDelete && !isPending && (
+            <button
+              onClick={handleDelete}
+              disabled={isDeleting}
+              title="Remove approval record"
+              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+            >
+              {isDeleting ? <Loader2 className="w-4 h-4 animate-spin text-rose-400" /> : <Trash2 className="w-4 h-4" />}
+            </button>
+          )}
+          <button 
+            onClick={() => setExpanded(!expanded)}
+            className="text-slate-400 hover:text-slate-200 p-1.5 rounded-md hover:bg-slate-800"
+          >
+            {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+          </button>
+        </div>
       </div>
 
       {/* Body */}
@@ -135,10 +168,18 @@ export const ApprovalCard: React.FC<ApprovalCardProps> = ({
           {/* Execution Result (if completed) */}
           {approval.execution_result && (
             <div>
-              <div className="text-xs font-semibold text-slate-300 mb-1">External System Response:</div>
+              <div className="text-xs font-semibold text-slate-300 mb-1">Execution Outcome:</div>
               <pre className="p-3 rounded-lg bg-slate-950 border border-slate-800 text-xs font-mono text-slate-300 overflow-x-auto max-h-36">
                 {JSON.stringify(approval.execution_result, null, 2)}
               </pre>
+            </div>
+          )}
+
+          {/* Expired notice */}
+          {isExpired && (
+            <div className="flex items-center gap-2 p-3 rounded-lg bg-slate-800/60 border border-slate-700/60 text-xs text-slate-300">
+              <Clock className="w-4 h-4 text-slate-400 shrink-0" />
+              <span>This proposed action exceeded its 15-minute validity window without authorization and has expired safely.</span>
             </div>
           )}
 

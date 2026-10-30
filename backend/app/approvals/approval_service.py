@@ -196,7 +196,7 @@ class ApprovalService:
             # Check truthful execution outcome
             is_failed = False
             if isinstance(execution_result, dict):
-                if not execution_result.get("success", True) or execution_result.get("status") in ("FAILED", "ERROR") or "error" in execution_result:
+                if not execution_result.get("success", True) or execution_result.get("status") in ("FAILED", "ERROR") or bool(execution_result.get("error")):
                     is_failed = True
 
             approval.approval_status = "failed" if is_failed else "succeeded"

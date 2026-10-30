@@ -57,11 +57,22 @@ async def get_integrations_status(
         elif c.provider == "postgresql":
             status = "connected"
             source_mode = "live_database"
-            notes = "PostgreSQL Operational Database (FastMCP read/write boundary active)"
+            ops_url = os.getenv("OPS_DATABASE_URL", "")
+            if "neon.tech" in ops_url:
+                notes = "Connected to Live Neon PostgreSQL (ep-bold-bread-b5769wdw-pooler.c-7.us-east-2.aws.neon.tech/neondb)"
+            elif "postgresql" in ops_url:
+                notes = "Connected to Live PostgreSQL Database"
+            else:
+                notes = "PostgreSQL Operational Database (FastMCP read/write boundary active)"
         elif c.provider == "email":
             status = "connected"
-            source_mode = "live_store" if not is_demo else "mock_sandbox"
-            notes = "Enterprise Operations Mailbox store connected"
+            smtp_user = os.getenv("SMTP_USER", "").strip()
+            if smtp_user:
+                source_mode = "live_smtp"
+                notes = f"Connected to Live SMTP ({os.getenv('SMTP_HOST', 'smtp.gmail.com')}) — Sender: {smtp_user}"
+            else:
+                source_mode = "live_store" if not is_demo else "mock_sandbox"
+                notes = "Enterprise Operations Mailbox store connected"
         elif c.provider == "calendar":
             status = "connected"
             source_mode = "live_store" if not is_demo else "mock_sandbox"

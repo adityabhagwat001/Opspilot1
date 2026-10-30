@@ -79,6 +79,13 @@ export interface ChatMessage {
   timestamp: string;
 }
 
+export interface Conversation {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface GitHubAccount {
   status: string;
   connected: boolean;
@@ -149,6 +156,7 @@ export interface FixProposalItem {
   id: string;
   failure_id: string;
   repo_name: string;
+  repo_full_name?: string;
   branch_name: string;
   title: string;
   description: string;

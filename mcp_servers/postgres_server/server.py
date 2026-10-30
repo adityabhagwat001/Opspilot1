@@ -29,6 +29,7 @@ from db import (
     OperationalIncident,
     OperationalTask,
     DatabaseEntity,
+    utc_now,
 )
 from envelope import create_success_envelope, create_error_envelope
 
@@ -72,7 +73,11 @@ def verify_approval_token(
         # Validate arguments integrity: actual arguments MUST match token hash
         actual_hash = compute_action_hash(tool_name, args)
         if not hmac.compare_digest(actual_hash, token_action_hash):
-            return False
+            # Check with None values stripped in case caller omitted optional parameters
+            stripped_args = {k: v for k, v in args.items() if v is not None}
+            stripped_hash = compute_action_hash(tool_name, stripped_args)
+            if not hmac.compare_digest(stripped_hash, token_action_hash):
+                return False
 
         # Validate HMAC signature
         canonical = f"{tool_name}:{workspace_id}:{nonce}:{timestamp_str}:{token_action_hash}"
@@ -427,8 +432,8 @@ async def create_operational_task(
         priority=priority,
         assignee=assignee,
         workspace_id=workspace_id,
-        created_at=datetime.datetime.now(datetime.timezone.utc),
-        updated_at=datetime.datetime.now(datetime.timezone.utc)
+        created_at=utc_now(),
+        updated_at=utc_now()
     )
 
     async with ops_db.session_factory() as session:
@@ -501,7 +506,7 @@ async def update_operational_task(
             task.priority = priority
         if assignee:
             task.assignee = assignee
-        task.updated_at = datetime.datetime.now(datetime.timezone.utc)
+        task.updated_at = utc_now()
 
         await session.commit()
 
@@ -560,7 +565,7 @@ async def update_incident_status(
             )
 
         incident.status = status
-        incident.updated_at = datetime.datetime.now(datetime.timezone.utc)
+        incident.updated_at = utc_now()
         await session.commit()
 
     return create_success_envelope(
