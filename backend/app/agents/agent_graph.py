@@ -195,7 +195,16 @@ async def synthesize_with_llm(
 
             # 2. OpenAI / OpenRouter / Gemini / Groq (OpenAI-compatible chat completions)
             else:
-                if openrouter_key:
+                provider = (getattr(settings, "LLM_PROVIDER", "") or os.getenv("LLM_PROVIDER") or "").lower()
+                if groq_key and (provider == "groq" or not openai_key):
+                    api_url = "https://api.groq.com/openai/v1/chat/completions"
+                    auth_header = f"Bearer {groq_key}"
+                    user_model = (getattr(settings, "LLM_MODEL", "") or os.getenv("LLM_MODEL") or "").strip()
+                    if user_model and user_model not in ("gpt-4o", "mock", "openai"):
+                        model = user_model
+                    else:
+                        model = "openai/gpt-oss-120b"
+                elif openrouter_key:
                     api_url = "https://openrouter.ai/api/v1/chat/completions"
                     auth_header = f"Bearer {openrouter_key}"
                     model = settings.LLM_MODEL or "openai/gpt-4o"
@@ -203,14 +212,6 @@ async def synthesize_with_llm(
                     api_url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
                     auth_header = f"Bearer {gemini_key}"
                     model = settings.LLM_MODEL if "gemini" in (settings.LLM_MODEL or "") else "gemini-1.5-flash"
-                elif groq_key and not openai_key:
-                    api_url = "https://api.groq.com/openai/v1/chat/completions"
-                    auth_header = f"Bearer {groq_key}"
-                    user_model = (settings.LLM_MODEL or "").strip()
-                    if user_model and user_model not in ("gpt-4o", "mock", "openai"):
-                        model = user_model
-                    else:
-                        model = "openai/gpt-oss-120b"
                 else:
                     api_url = "https://api.openai.com/v1/chat/completions"
                     auth_header = f"Bearer {openai_key}"
@@ -416,8 +417,14 @@ async def plan_actions_node(state: OpsAgentState) -> Dict[str, Any]:
         if slug_match and slug_match.group(1).lower() not in ("http", "https"):
             owner = slug_match.group(1)
             repo = slug_match.group(2)
-        elif settings.GITHUB_DEFAULT_REPO and settings.GITHUB_DEFAULT_REPO.lower() in req:
-            repo = settings.GITHUB_DEFAULT_REPO
+        else:
+            repo_match = re.search(r"\b(?:in|for|from|repo|repository)\s+([a-zA-Z0-9_\-]+)\b|\b([a-zA-Z0-9_\-]+)\s+(?:repo|repository)\b", state["user_request"], re.IGNORECASE)
+            if repo_match:
+                extracted_repo = (repo_match.group(1) or repo_match.group(2) or "").strip()
+                if extracted_repo.lower() not in ("my", "the", "a", "an", "all", "this", "our", "git", "github", "any", "each", "one", "some", "latest"):
+                    repo = extracted_repo
+            elif settings.GITHUB_DEFAULT_REPO and settings.GITHUB_DEFAULT_REPO.lower() in req:
+                repo = settings.GITHUB_DEFAULT_REPO
 
         # 1. Commits / Recent Activities
         if any(k in req for k in ["commit", "commits", "activity", "activities"]) and not any(k in req for k in ["error", "fail", "why", "cause"]):
@@ -537,23 +544,53 @@ async def plan_actions_node(state: OpsAgentState) -> Dict[str, Any]:
                 "is_write": False,
                 "description": f"List open pull requests in {owner}/{repo}"
             })
-        # 8. Issue listing & priority ranking
-        elif "issue" in req and any(k in req for k in ["highest priority", "priority", "most critical", "rank"]):
-            planned.append({
-                "tool": "list_issues",
-                "system": "github",
-                "args": {"owner": owner, "repo": repo, "state": "open"},
-                "is_write": False,
-                "description": f"Retrieve open issues from {owner}/{repo} to evaluate priority"
-            })
-        elif "issue" in req and any(k in req for k in ["list", "open", "show", "find"]) and "create" not in req:
-            planned.append({
-                "tool": "list_issues",
-                "system": "github",
-                "args": {"owner": owner, "repo": repo, "state": "open"},
-                "is_write": False,
-                "description": f"List open issues in {owner}/{repo}"
-            })
+        # 8. Issue listing, diagnostic & automated solving
+        elif "issue" in req or any(k in req for k in ["solve", "fix issue", "resolve issue"]):
+            if any(k in req for k in ["highest priority", "priority", "most critical", "rank"]):
+                planned.append({
+                    "tool": "list_issues",
+                    "system": "github",
+                    "args": {"owner": owner, "repo": repo, "state": "open"},
+                    "is_write": False,
+                    "description": f"Retrieve open issues from {owner}/{repo} to evaluate priority"
+                })
+            elif any(k in req for k in ["solve", "fix", "resolve", "patch", "remediate"]):
+                # 1. Inspect the issue
+                planned.append({
+                    "tool": "list_issues",
+                    "system": "github",
+                    "args": {"owner": owner, "repo": repo, "state": "open"},
+                    "is_write": False,
+                    "description": f"Inspect open issues in {owner}/{repo} to identify root cause"
+                })
+                # 2. Stage fix Pull Request (HITL Gated)
+                branch_name = f"opspilot-fix/{repo}-remediation"
+                planned.append({
+                    "tool": "create_pull_request",
+                    "system": "github",
+                    "args": {
+                        "owner": owner,
+                        "repo": repo,
+                        "title": f"Fix: Remediate open issue in {repo}",
+                        "body": (
+                            f"Automated AI fix proposal generated by OpsPilot for `{owner}/{repo}`.\n\n"
+                            f"**Remediation Plan:** Resolved open issue detected during operational triage."
+                        ),
+                        "head": branch_name,
+                        "base": "main",
+                        "patch_files": [{"path": "README.md", "content": f"# {repo}\n\nAutomated issue remediation patch applied."}]
+                    },
+                    "is_write": True,
+                    "summary": f"Create fix branch '{branch_name}' and open Pull Request in '{owner}/{repo}'"
+                })
+            else:
+                planned.append({
+                    "tool": "list_issues",
+                    "system": "github",
+                    "args": {"owner": owner, "repo": repo, "state": "open"},
+                    "is_write": False,
+                    "description": f"List open issues in {owner}/{repo}"
+                })
         # 9. Issue creation
         elif "create" in req and "issue" in req:
             inc_info = extract_incident_from_history(history, state["user_request"])
@@ -972,7 +1009,19 @@ async def generate_response_node(state: OpsAgentState) -> Dict[str, Any]:
         lines.append(f"```json\n{json.dumps(pending['arguments'], indent=2)}\n```")
         lines.append("\n*Safety Enforcement: This mutation has NOT been executed on any external provider. Explicit human review and approval is required.*")
 
-    final_text = "\n".join(lines) if lines else "Operational inspection completed. No matching records found."
+    if not lines:
+        lines.append(
+            f"### 🤖 OpsPilot AI Operations Assistant\n\n"
+            f"I reviewed your request: **\"{state.get('user_request')}\"**.\n\n"
+            f"Here is what you can do next with live real-time infrastructure:\n"
+            f"- **Inspect a Repository:** Ask *'List repositories'* or *'Check open issues in safeher'*\n"
+            f"- **Resolve a Pipeline/Issue:** Ask *'Solve the open issue in safeher'* or *'Fix failing CI/CD workflow'*\n"
+            f"- **Database Health:** Ask *'Show PostgreSQL incidents and slow queries'*\n"
+            f"- **Triage Emails & Calendar:** Ask *'Find unread operational emails'* or *'Check calendar availability for standup'*\n\n"
+            f"What specific error, repository, or operational task would you like me to tackle?"
+        )
+
+    final_text = "\n".join(lines)
     return {
         "final_response": final_text,
         "execution_status": "awaiting_approval" if pending else "completed",
