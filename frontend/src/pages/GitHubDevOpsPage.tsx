@@ -348,13 +348,27 @@ export const GitHubDevOpsPage: React.FC = () => {
   }
 
   // Filter out any mock/fake enterprise-ops entries and broken mock run IDs
-  const safeFailures = (failures || []).filter(f => !f.repo_full_name?.includes('enterprise-ops'));
+  const safeFailures = (failures || []).filter(
+    f => !f.repo_full_name?.includes('enterprise-ops') && 
+         !f.run_id?.toString().includes('38245754075') &&
+         !f.html_url?.includes('38245754075')
+  );
   const safeRepos = (repositories || []).filter(r => !r.full_name?.includes('enterprise-ops') && !r.name?.includes('enterprise-ops'));
-  const safeProposals = (proposals || []).filter(p => !p.repo_full_name?.includes('enterprise-ops') && !p.repo_name?.includes('enterprise-ops'));
+  const safeProposals = (proposals || []).filter(
+    p => !p.repo_full_name?.includes('enterprise-ops') && 
+         !p.repo_name?.includes('enterprise-ops') &&
+         !p.branch_name?.includes('38245754075') &&
+         !p.title?.includes('38245754075') &&
+         !p.pr_url?.includes('/pull/101')
+  );
   const safeEvents = (events || []).filter(e => !e.repo_full_name?.includes('enterprise-ops'));
   const safeNotifications = (notifications || []).filter(
     n => !n.message?.includes('enterprise-ops') && 
          !n.title?.includes('enterprise-ops') && 
+         !n.message?.includes('38245754075') && 
+         !n.title?.includes('38245754075') && 
+         !n.message?.includes('/pull/101') && 
+         !n.message?.includes('#101') && 
          !n.message?.includes('#38558137') && 
          !n.message?.includes('#26776825')
   );
@@ -850,7 +864,11 @@ export const GitHubDevOpsPage: React.FC = () => {
           ) : (
             safeProposals.map(proposal => {
               const isExecuting = actionLoadingId === `exec-${proposal.id}`;
-              const isValidPr = proposal.pr_url && !proposal.pr_url.includes('enterprise-ops') && proposal.pr_url.startsWith('https://github.com/');
+              const isDeadPr = proposal.pr_url?.endsWith('/pull/101') || proposal.pr_number === 101;
+              const effectivePrUrl = isDeadPr 
+                ? `https://github.com/${proposal.repo_name || proposal.repo_full_name}/pulls`
+                : proposal.pr_url;
+              const isValidPr = effectivePrUrl && !effectivePrUrl.includes('enterprise-ops') && effectivePrUrl.startsWith('https://github.com/');
 
               return (
                 <div key={proposal.id} className="glass-panel p-6 rounded-2xl border border-slate-800 space-y-4">
@@ -874,13 +892,13 @@ export const GitHubDevOpsPage: React.FC = () => {
                         <span>Fix Branch: <code className="text-purple-300">{proposal.branch_name}</code></span>
                         {isValidPr && (
                           <a 
-                            href={proposal.pr_url} 
+                            href={effectivePrUrl} 
                             target="_blank" 
                             rel="noreferrer" 
                             className="flex items-center gap-1 text-emerald-400 hover:text-emerald-300 font-bold"
                           >
                             <GitPullRequest className="w-3.5 h-3.5" />
-                            <span>PR #{proposal.pr_number || ''}</span>
+                            <span>{isDeadPr ? 'Repository Pulls' : `PR #${proposal.pr_number || ''}`}</span>
                             <ExternalLink className="w-3 h-3" />
                           </a>
                         )}
@@ -912,13 +930,13 @@ export const GitHubDevOpsPage: React.FC = () => {
 
                       {proposal.status === 'applied' && isValidPr && (
                         <a
-                          href={proposal.pr_url}
+                          href={effectivePrUrl}
                           target="_blank"
                           rel="noreferrer"
                           className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold bg-purple-600/20 text-purple-300 border border-purple-500/30 hover:bg-purple-600/30 transition-colors"
                         >
                           <GitPullRequest className="w-3.5 h-3.5" />
-                          <span>View Open Pull Request</span>
+                          <span>{isDeadPr ? 'View Repository Pulls' : 'View Open Pull Request'}</span>
                           <ExternalLink className="w-3 h-3" />
                         </a>
                       )}

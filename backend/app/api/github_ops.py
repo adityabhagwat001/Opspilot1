@@ -1387,7 +1387,10 @@ async def list_proposals(
         select(FixProposal)
         .where(
             FixProposal.workspace_id == member.workspace_id,
-            ~FixProposal.repo_full_name.like("%enterprise-ops%")
+            ~FixProposal.repo_full_name.like("%enterprise-ops%"),
+            ~FixProposal.fix_branch.like("%38245754075%"),
+            ~FixProposal.title.like("%38245754075%"),
+            ~FixProposal.pull_request_url.like("%/pull/101")
         )
         .order_by(desc(FixProposal.created_at))
     )
@@ -1398,8 +1401,8 @@ async def list_proposals(
     for p in props:
         appr_status = "pending"
         pr_url = p.pr_url
-        if pr_url and "enterprise-ops" in pr_url:
-            pr_url = None
+        if pr_url and ("enterprise-ops" in pr_url or pr_url.endswith("/pull/101") or pr_url.endswith("/pull/1")):
+            pr_url = f"https://github.com/{p.repo_full_name}/pulls"
 
         if p.approval_id:
             appr = (await db.execute(select(ApprovalRequest).where(ApprovalRequest.id == p.approval_id))).scalar_one_or_none()
@@ -1410,10 +1413,14 @@ async def list_proposals(
                         res_obj = json.loads(appr.execution_result)
                         candidate_url = res_obj.get("data", {}).get("html_url") or res_obj.get("html_url")
                         if candidate_url and "enterprise-ops" not in candidate_url:
-                            pr_url = candidate_url
+                            if candidate_url.endswith("/pull/101") or candidate_url.endswith("/pull/1"):
+                                pr_url = f"https://github.com/{p.repo_full_name}/pulls"
+                            else:
+                                pr_url = candidate_url
                     except Exception:
                         pass
 
+        pr_num = p.pr_number if p.pr_number != 101 else None
         output.append({
             "id": p.id,
             "failure_id": p.failure_id,
@@ -1426,7 +1433,7 @@ async def list_proposals(
             "status": p.status if p.status != "proposed" else appr_status,
             "approval_id": p.approval_id,
             "pr_url": pr_url,
-            "pr_number": p.pr_number,
+            "pr_number": pr_num,
             "created_at": p.created_at.isoformat() + "Z" if p.created_at else None
         })
     return output
@@ -1602,7 +1609,11 @@ async def get_notifications(
             ~InAppNotification.message.like("%enterprise-ops%"),
             ~InAppNotification.title.like("%enterprise-ops%"),
             ~InAppNotification.message.like("%#38558137%"),
-            ~InAppNotification.message.like("%#26776825%")
+            ~InAppNotification.message.like("%#26776825%"),
+            ~InAppNotification.message.like("%38245754075%"),
+            ~InAppNotification.title.like("%38245754075%"),
+            ~InAppNotification.message.like("%pull/101%"),
+            ~InAppNotification.message.like("%#101%")
         )
         .order_by(desc(InAppNotification.created_at))
         .limit(30)
@@ -1715,36 +1726,6 @@ async def sync_github_data(
                                     synced_items += 1
             except Exception:
                 pass
-
-    if not token:
-        chk_active = await db.execute(select(WorkflowFailure).where(
-            WorkflowFailure.workspace_id == member.workspace_id,
-            WorkflowFailure.status == "detected",
-            ~WorkflowFailure.repo_full_name.like("%enterprise-ops%")
-        ))
-        if not chk_active.scalars().all():
-            target_repo = monitored_repos[0].repo_full_name if monitored_repos else f"{settings.GITHUB_DEFAULT_OWNER or 'narendrashelke'}/{settings.GITHUB_DEFAULT_REPO or 'animal-feed-billing'}"
-            target_owner = target_repo.split("/")[0]
-            sim_fail = WorkflowFailure(
-                workspace_id=member.workspace_id,
-                repo_full_name=target_repo,
-                workflow_id="ci.yml",
-                workflow_name="OpsPilot CI",
-                run_id=38245754075,
-                commit_sha="a1b2c3d4e5f67890abcdef1234567890abcdef12",
-                commit_message="feat: update dependencies and configuration",
-                branch="main",
-                sender=target_owner,
-                html_url=f"https://github.com/{target_repo}/actions/runs/38245754075",
-                failing_step="Run pytest and validation checks",
-                error_log_snippet="ModuleNotFoundError: No module named 'pydantic-settings'. Required dependency is missing from production dependencies.",
-                status="detected",
-                detected_at=now
-            )
-            db.add(sim_fail)
-            synced_items += 1
-
-
     await db.commit()
 
     return {

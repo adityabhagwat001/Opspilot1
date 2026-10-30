@@ -1651,14 +1651,14 @@ async def create_pull_request(
 
     token = os.getenv("GITHUB_TOKEN", "")
     if not token and is_mock_allowed():
-        url = f"https://github.com/{owner}/{repo}/pull/101"
+        url = f"https://github.com/{owner}/{repo}/pulls"
         return create_success_envelope(
             system="github",
             tool="create_pull_request",
             is_write=True,
             data={
                 "status": "SUCCESS",
-                "number": 101,
+                "number": None,
                 "title": title,
                 "html_url": url,
                 "head": head,
