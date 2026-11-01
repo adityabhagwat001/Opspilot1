@@ -1,1 +1,2 @@
 -r backend/requirements.txt
+pydantic-settings>=2.0
