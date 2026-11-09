@@ -40,7 +40,10 @@ async def list_conversations(
     """
     stmt = (
         select(AgentConversation)
-        .where(AgentConversation.user_id == user.id)
+        .where(
+            AgentConversation.user_id == user.id,
+            AgentConversation.workspace_id == member.workspace_id
+        )
         .order_by(AgentConversation.updated_at.desc())
     )
     result = await db.execute(stmt)
@@ -65,10 +68,11 @@ async def get_messages(
     """
     Get messages for a conversation. Strictly validates user ownership.
     """
-    # Enforce object ownership
+    # Enforce object ownership and workspace isolation
     conv_stmt = select(AgentConversation).where(
         AgentConversation.id == conversation_id,
-        AgentConversation.user_id == user.id
+        AgentConversation.user_id == user.id,
+        AgentConversation.workspace_id == member.workspace_id
     )
     conv = (await db.execute(conv_stmt)).scalar_one_or_none()
     if not conv:
@@ -137,7 +141,8 @@ async def delete_conversation(
     """
     conv_stmt = select(AgentConversation).where(
         AgentConversation.id == conversation_id,
-        AgentConversation.user_id == user.id
+        AgentConversation.user_id == user.id,
+        AgentConversation.workspace_id == member.workspace_id
     )
     conv = (await db.execute(conv_stmt)).scalar_one_or_none()
     if not conv:
@@ -181,7 +186,8 @@ async def update_conversation_title(
     """
     conv_stmt = select(AgentConversation).where(
         AgentConversation.id == conversation_id,
-        AgentConversation.user_id == user.id
+        AgentConversation.user_id == user.id,
+        AgentConversation.workspace_id == member.workspace_id
     )
     conv = (await db.execute(conv_stmt)).scalar_one_or_none()
     if not conv:
@@ -223,7 +229,8 @@ async def send_message(
     if conv_id:
         conv_stmt = select(AgentConversation).where(
             AgentConversation.id == conv_id,
-            AgentConversation.user_id == user.id
+            AgentConversation.user_id == user.id,
+            AgentConversation.workspace_id == member.workspace_id
         )
         conv = (await db.execute(conv_stmt)).scalar_one_or_none()
         if not conv:
@@ -282,6 +289,7 @@ async def send_message(
         "execution_id": execution.id,
         "conversation_id": conv_id,
         "user_id": user.id,
+        "user_role": user.role,
         "workspace_id": member.workspace_id,
         "user_request": payload.message,
         "conversation_history": conversation_history,
@@ -367,10 +375,11 @@ async def stream_execution_progress(
     Server-Sent Events (SSE) streaming real execution status from database.
     Strictly verifies ownership of execution record.
     """
-    # Enforce object ownership
+    # Enforce object ownership and workspace isolation
     stmt = select(AgentExecution).where(
         AgentExecution.id == execution_id,
-        AgentExecution.user_id == user.id
+        AgentExecution.user_id == user.id,
+        AgentExecution.workspace_id == member.workspace_id
     )
     exec_check = (await db.execute(stmt)).scalar_one_or_none()
     if not exec_check:
@@ -384,7 +393,8 @@ async def stream_execution_progress(
         for _ in range(30):
             stmt = select(AgentExecution).where(
                 AgentExecution.id == execution_id,
-                AgentExecution.user_id == user.id
+                AgentExecution.user_id == user.id,
+                AgentExecution.workspace_id == member.workspace_id
             )
             exec_rec = (await db.execute(stmt)).scalar_one_or_none()
             if not exec_rec:

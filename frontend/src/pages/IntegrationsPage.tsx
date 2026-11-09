@@ -9,7 +9,7 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { api } from '../services/api';
-import { Integration } from '../types';
+import { Integration, User } from '../types';
 
 const fetchClientTools = async () => {
   try {
@@ -22,7 +22,11 @@ const fetchClientTools = async () => {
   }
 };
 
-export const IntegrationsPage: React.FC = () => {
+interface IntegrationsPageProps {
+  currentUser?: User | null;
+}
+
+export const IntegrationsPage: React.FC<IntegrationsPageProps> = ({ currentUser }) => {
   const navigate = useNavigate();
   const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [totalTools, setTotalTools] = useState<number>(0);
@@ -81,10 +85,25 @@ export const IntegrationsPage: React.FC = () => {
     <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-black text-white">Connected Systems & FastMCP Servers</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-black text-white">Connected Systems & FastMCP Servers</h1>
+          <span className={`text-[10px] font-mono font-bold uppercase px-2 py-0.5 rounded border ${
+            currentUser?.role === 'admin'
+              ? 'bg-amber-500/10 text-amber-300 border-amber-500/30'
+              : 'bg-sky-500/10 text-sky-300 border-sky-500/30'
+          }`}>
+            {currentUser?.role === 'admin' ? 'Admin Credential Management' : 'Operator Telemetry (Read-Only)'}
+          </span>
+        </div>
         <p className="text-xs text-slate-400 mt-1">
           OpsPilot connects directly to live enterprise systems using custom Model Context Protocol (MCP) servers with dynamic tool discovery.
         </p>
+        {currentUser?.role !== 'admin' && (
+          <div className="mt-3 p-3 rounded-xl bg-sky-500/10 border border-sky-500/20 text-xs text-sky-300 flex items-center gap-2">
+            <span className="font-semibold">Operator View (Read-Only Status):</span>
+            <span>You can monitor live FastMCP connectivity and exposed tool capabilities. Enterprise credential rotation and connection provisioning are restricted to Enterprise Administrators.</span>
+          </div>
+        )}
       </div>
 
       {/* Integration Cards Grid */}

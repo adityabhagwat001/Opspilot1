@@ -142,3 +142,83 @@ async def test_langgraph_agent_contextual_issue_creation():
     args = result["pending_approval"]["arguments"]
     assert "auth-service" in args["repo"] or "auth" in args["title"].lower()
     assert "INC-101" in args["body"]
+
+@pytest.mark.asyncio
+async def test_langgraph_agent_database_records_query():
+    state = {
+        "execution_id": "test-records-01",
+        "conversation_id": "conv-test-06",
+        "user_id": "usr-admin-01",
+        "workspace_id": "default-ops",
+        "user_request": "Show me the latest records in my database.",
+        "conversation_history": [],
+        "target_systems": [],
+        "available_tools": [],
+        "planned_actions": [],
+        "completed_actions": [],
+        "pending_approval": None,
+        "tool_results": [],
+        "final_response": None,
+        "execution_status": "received",
+        "current_step": "init",
+        "errors": []
+    }
+    result = await agent_executor.ainvoke(state)
+    assert result["execution_status"] == "completed"
+    assert len(result["tool_results"]) >= 1
+    assert result["tool_results"][0]["tool"] == "execute_read_only_query"
+    assert "Safe Database Query Results" in result["final_response"] or "operational_incidents" in result["final_response"]
+
+@pytest.mark.asyncio
+async def test_langgraph_agent_database_schema_inspection():
+    state = {
+        "execution_id": "test-schema-01",
+        "conversation_id": "conv-test-07",
+        "user_id": "usr-admin-01",
+        "workspace_id": "default-ops",
+        "user_request": "Inspect the database schema and show all tables.",
+        "conversation_history": [],
+        "target_systems": [],
+        "available_tools": [],
+        "planned_actions": [],
+        "completed_actions": [],
+        "pending_approval": None,
+        "tool_results": [],
+        "final_response": None,
+        "execution_status": "received",
+        "current_step": "init",
+        "errors": []
+    }
+    result = await agent_executor.ainvoke(state)
+    assert result["execution_status"] == "completed"
+    assert len(result["tool_results"]) >= 1
+    assert result["tool_results"][0]["tool"] == "inspect_database_schema"
+    assert "Database Schema & Tables" in result["final_response"]
+    assert "operational_incidents" in result["final_response"]
+
+@pytest.mark.asyncio
+async def test_langgraph_agent_github_activities():
+    state = {
+        "execution_id": "test-activities-01",
+        "conversation_id": "conv-test-08",
+        "user_id": "usr-admin-01",
+        "workspace_id": "default-ops",
+        "user_request": "Show me my latest GitHub activities.",
+        "conversation_history": [],
+        "target_systems": [],
+        "available_tools": [],
+        "planned_actions": [],
+        "completed_actions": [],
+        "pending_approval": None,
+        "tool_results": [],
+        "final_response": None,
+        "execution_status": "received",
+        "current_step": "init",
+        "errors": []
+    }
+    result = await agent_executor.ainvoke(state)
+    assert result["execution_status"] == "completed"
+    assert len(result["tool_results"]) >= 1
+    assert result["tool_results"][0]["tool"] == "list_commits"
+    assert "GitHub Commits" in result["final_response"]
+

@@ -5,9 +5,10 @@ SQLAlchemy ORM models covering RBAC, Executions, Approvals, and Audit Logs.
 
 import uuid
 import datetime
-from typing import Optional, List
+import json
+from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
-from sqlalchemy import String, Text, DateTime, Boolean, Integer, ForeignKey
+from sqlalchemy import String, Text, DateTime, Boolean, Integer, ForeignKey, UniqueConstraint
 
 class Base(DeclarativeBase):
     pass
@@ -27,7 +28,17 @@ class User(Base):
     full_name: Mapped[str] = mapped_column(String(100), nullable=False)
     role: Mapped[str] = mapped_column(String(20), default="operator")  # admin, operator, viewer
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    verification_token: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    verification_token_expires_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)
+    reset_password_token: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    reset_password_token_expires_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)
+    account_type: Mapped[str] = mapped_column(String(20), default="individual")  # individual, company
+    account_status: Mapped[str] = mapped_column(String(30), default="active")  # active, inactive, suspended
+    company_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    last_login_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
 class Workspace(Base):
     __tablename__ = "workspaces"
@@ -35,7 +46,12 @@ class Workspace(Base):
     id: Mapped[str] = mapped_column(String(50), primary_key=True, default=generate_uuid)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     slug: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    company_email: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
+    website: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    industry: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="active")  # active, suspended
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
 
 class WorkspaceMember(Base):
     __tablename__ = "workspace_members"
@@ -44,6 +60,20 @@ class WorkspaceMember(Base):
     workspace_id: Mapped[str] = mapped_column(String(50), ForeignKey("workspaces.id"), nullable=False)
     user_id: Mapped[str] = mapped_column(String(50), ForeignKey("users.id"), nullable=False)
     role: Mapped[str] = mapped_column(String(20), default="operator")
+
+class WorkspaceInvitation(Base):
+    __tablename__ = "workspace_invitations"
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True, default=generate_uuid)
+    workspace_id: Mapped[str] = mapped_column(String(50), ForeignKey("workspaces.id"), nullable=False)
+    email: Mapped[str] = mapped_column(String(150), index=True, nullable=False)
+    role: Mapped[str] = mapped_column(String(20), default="operator")
+    invitation_token: Mapped[str] = mapped_column(String(100), unique=True, index=True, nullable=False)
+    token_hash: Mapped[Optional[str]] = mapped_column(String(64), index=True, nullable=True)
+    invited_by_user_id: Mapped[str] = mapped_column(String(50), ForeignKey("users.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending, accepted, expired, revoked
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now)
+    expires_at: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False)
 
 class IntegrationConnection(Base):
     __tablename__ = "integration_connections"
@@ -54,6 +84,26 @@ class IntegrationConnection(Base):
     status: Mapped[str] = mapped_column(String(30), default="connected")  # connected, disconnected, error
     details_json: Mapped[str] = mapped_column(Text, default="{}")
     last_sync_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now)
+
+    @property
+    def details(self) -> Dict[str, Any]:
+        try:
+            return json.loads(self.details_json or "{}")
+        except Exception:
+            return {}
+
+    @property
+    def account_login(self) -> Optional[str]:
+        return self.details.get("login")
+
+    @property
+    def is_active(self) -> bool:
+        return self.details.get("is_active", self.status == "connected")
+
+    @property
+    def token(self) -> Optional[str]:
+        return self.details.get("token")
+
 
 class AgentConversation(Base):
     __tablename__ = "agent_conversations"
@@ -148,6 +198,10 @@ class AuditLog(Base):
     tool_name: Mapped[str] = mapped_column(String(100), nullable=False)
     parameters_json: Mapped[str] = mapped_column(Text, default="{}")
     approval_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    proposal_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
+    failure_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
+    repo_full_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    solution_history_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     result_summary: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(20), default="success")  # success, failure, rejected
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now)
@@ -158,12 +212,15 @@ class AuditLog(Base):
 
 class MonitoredRepository(Base):
     __tablename__ = "monitored_repositories"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "full_name", name="uq_workspace_repo_fullname"),
+    )
 
     id: Mapped[str] = mapped_column(String(50), primary_key=True, default=generate_uuid)
     workspace_id: Mapped[str] = mapped_column(String(50), default="default-ops", index=True)
     owner: Mapped[str] = mapped_column(String(100), nullable=False)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
-    full_name: Mapped[str] = mapped_column(String(200), unique=True, index=True, nullable=False)
+    full_name: Mapped[str] = mapped_column(String(200), index=True, nullable=False)
     default_branch: Mapped[str] = mapped_column(String(50), default="main")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     health_score: Mapped[int] = mapped_column(Integer, default=100)
@@ -243,7 +300,12 @@ class WorkflowFailure(Base):
     error_log_snippet: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     analysis_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     root_cause: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    status: Mapped[str] = mapped_column(String(30), default="detected", index=True)  # detected, analyzing, fix_proposed, fix_approved, resolved
+    analysis_status: Mapped[str] = mapped_column(String(30), default="NOT_ANALYZED", nullable=True)  # NOT_ANALYZED, ANALYZING, ANALYZED, ANALYSIS_FAILED
+    structured_analysis_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    resolution_status: Mapped[str] = mapped_column(String(30), default="NOT_VERIFIED", nullable=True)  # NOT_VERIFIED, VERIFYING, VERIFIED_RESOLVED, STILL_FAILING, VERIFICATION_FAILED
+    resolution_evidence_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    resolution_verified_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="detected", index=True)  # detected, analyzing, fix_proposed, fix_applied, resolved
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now, index=True)
 
     @property
@@ -283,10 +345,17 @@ class FixProposal(Base):
     explanation: Mapped[str] = mapped_column(Text, nullable=False)
     files_modified_json: Mapped[str] = mapped_column(Text, default="[]")  # list of {path, original, proposed, diff}
     diff: Mapped[str] = mapped_column(Text, default="")
+    test_results_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     approval_id: Mapped[Optional[str]] = mapped_column(String(50), ForeignKey("approval_requests.id"), nullable=True)
     pull_request_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     pr_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    status: Mapped[str] = mapped_column(String(30), default="proposed", index=True)  # proposed, approved, executed, rejected, failed
+    pr_state: Mapped[Optional[str]] = mapped_column(String(30), nullable=True, default="NOT_CREATED")  # OPEN, MERGED, CLOSED, NOT_CREATED, ERROR, UNKNOWN
+    status: Mapped[str] = mapped_column(String(30), default="proposed", index=True)  # proposed, pending_approval, approved, applying, applied, failed
+    resolution_status: Mapped[str] = mapped_column(String(30), default="NOT_VERIFIED", nullable=True)  # NOT_VERIFIED, VERIFYING, VERIFIED_RESOLVED, STILL_FAILING, VERIFICATION_FAILED
+    merge_commit_sha: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    merged_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)
+    verified_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)
+    verification_details_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=utc_now)
 
     @property
@@ -328,6 +397,14 @@ class FixProposal(Base):
     @pr_url.setter
     def pr_url(self, value: Optional[str]):
         self.pull_request_url = value
+
+    @property
+    def pr_status(self) -> str:
+        return self.pr_state or "NOT_CREATED"
+
+    @pr_status.setter
+    def pr_status(self, value: Optional[str]):
+        self.pr_state = value or "NOT_CREATED"
 
 class InAppNotification(Base):
     __tablename__ = "in_app_notifications"

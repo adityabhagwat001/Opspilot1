@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   GitBranch, 
@@ -20,7 +20,15 @@ import {
   Eye,
   EyeOff,
   X,
-  Trash2
+  Trash2,
+  GitCommit,
+  Lock,
+  Unlock,
+  Users,
+  ChevronDown,
+  Radio,
+  Sparkles,
+  Clock
 } from 'lucide-react';
 import { api } from '../services/api';
 import { 
@@ -30,10 +38,20 @@ import {
   WorkflowFailureItem, 
   FixProposalItem, 
   GitHubHealth, 
-  GitHubNotificationItem 
+  GitHubNotificationItem,
+  RepositoryOverview,
+  StructuredAnalysis,
+  SolutionHistory,
+  User
 } from '../types';
+import { AIIssueAnalysisPanel } from '../components/AIIssueAnalysisPanel';
+import { ViewSolutionModal } from '../components/ViewSolutionModal';
 
-export const GitHubDevOpsPage: React.FC = () => {
+interface GitHubDevOpsPageProps {
+  currentUser?: User | null;
+}
+
+export const GitHubDevOpsPage: React.FC<GitHubDevOpsPageProps> = ({ currentUser }) => {
   const navigate = useNavigate();
 
   // Primary State
@@ -45,13 +63,60 @@ export const GitHubDevOpsPage: React.FC = () => {
   const [health, setHealth] = useState<GitHubHealth | null>(null);
   const [notifications, setNotifications] = useState<GitHubNotificationItem[]>([]);
 
+  // Multi-Account & Telemetry State
+  const [connectedAccounts, setConnectedAccounts] = useState<Array<{
+    id: string;
+    login: string;
+    name: string;
+    avatar_url: string;
+    is_active: boolean;
+    status: string;
+    monitored_repositories_count: number;
+    last_synced_at?: string;
+  }>>([]);
+  const [switchingAccount, setSwitchingAccount] = useState<boolean>(false);
+  const [webhookStatus, setWebhookStatus] = useState<{
+    status: string;
+    is_publicly_reachable: boolean;
+    total_events_received: number;
+    last_event_at?: string;
+    webhook_url: string;
+    secret_configured: boolean;
+    guidance?: string;
+  } | null>(null);
+  const [lastSyncTime, setLastSyncTime] = useState<string>('');
+  const loadSeq = useRef(0);
+
   // UI State
   const [loading, setLoading] = useState<boolean>(true);
   const [syncing, setSyncing] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'failures' | 'proposals' | 'repos' | 'activity'>('failures');
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+  const [cardFeedback, setCardFeedback] = useState<{ [id: string]: { text: string; type: 'success' | 'error' } }>({});
   const [selectedFailure, setSelectedFailure] = useState<WorkflowFailureItem | null>(null);
+  const [expandedAnalysisFailureId, setExpandedAnalysisFailureId] = useState<string | null>(null);
+  const [activeSolution, setActiveSolution] = useState<SolutionHistory | null>(null);
+  const [isSolutionModalOpen, setIsSolutionModalOpen] = useState<boolean>(false);
+  const [solutionLoading, setSolutionLoading] = useState<boolean>(false);
+  const [verifyingProposalId, setVerifyingProposalId] = useState<string | null>(null);
+  const [selectedRepoOverview, setSelectedRepoOverview] = useState<RepositoryOverview | null>(null);
+  const [overviewLoading, setOverviewLoading] = useState<boolean>(false);
+
+  const handleInspectRepo = async (repo: GitHubRepository) => {
+    setOverviewLoading(true);
+    try {
+      const data = await api.getRepositoryOverview(repo.owner, repo.name);
+      setSelectedRepoOverview(data);
+    } catch (err: any) {
+      setStatusMessage({
+        text: `Failed to inspect repository: ${err?.response?.data?.detail || err.message}`,
+        type: 'error'
+      });
+    } finally {
+      setOverviewLoading(false);
+    }
+  };
 
   // Connect Another GitHub Profile Modal State
   const [isConnectModalOpen, setIsConnectModalOpen] = useState(false);
@@ -89,6 +154,28 @@ export const GitHubDevOpsPage: React.FC = () => {
     }
   };
 
+  const handleSwitchAccount = async (accountLogin: string) => {
+    if (switchingAccount) return;
+    setSwitchingAccount(true);
+    loadSeq.current++;
+    try {
+      const res = await api.switchGitHubAccount({ account_login: accountLogin });
+      setStatusMessage({
+        text: `Active context switched to @${res.active_account?.login || accountLogin}. Operational data refreshed.`,
+        type: 'success'
+      });
+      await loadAllData(false);
+    } catch (err: any) {
+      setStatusMessage({
+        text: `Account switch failed: ${err?.response?.data?.detail || err.message}`,
+        type: 'error'
+      });
+    } finally {
+      setSwitchingAccount(false);
+      setTimeout(() => setStatusMessage(null), 5000);
+    }
+  };
+
   const handleDisconnect = async () => {
     if (!window.confirm('Disconnect your active GitHub account?')) return;
     setConnecting(true);
@@ -108,19 +195,28 @@ export const GitHubDevOpsPage: React.FC = () => {
   };
 
   const loadAllData = async (showLoading = true) => {
+    const seq = ++loadSeq.current;
     if (showLoading) setLoading(true);
     try {
-      const [accRes, repoRes, failRes, propRes, eventRes, healthRes, notifRes] = await Promise.all([
+      const [accRes, accountsRes, repoRes, failRes, propRes, eventRes, healthRes, notifRes, hookRes] = await Promise.all([
         api.getGitHubAccount().catch(() => null),
+        api.getConnectedAccounts().catch(() => []),
         api.getGitHubRepositories().catch(() => ({ count: 0, repositories: [] })),
         api.getGitHubFailures(30).catch(() => []),
         api.getGitHubProposals().catch(() => []),
         api.getGitHubActivity(40).catch(() => []),
         api.getGitHubHealth().catch(() => null),
         api.getNotifications(false).catch(() => ({ unread_count: 0, notifications: [] })),
+        api.getWebhookStatus().catch(() => null),
       ]);
 
+      // Guard against stale responses overwriting newer account data
+      if (seq !== loadSeq.current) return;
+
       if (accRes) setAccount(accRes);
+      if (Array.isArray(accountsRes)) setConnectedAccounts(accountsRes);
+      if (hookRes) setWebhookStatus(hookRes);
+      setLastSyncTime(new Date().toLocaleTimeString());
 
       const safeRepos = Array.isArray(repoRes) 
         ? repoRes 
@@ -151,7 +247,7 @@ export const GitHubDevOpsPage: React.FC = () => {
     } catch (err: any) {
       console.error('Failed to load GitHub DevOps telemetry:', err);
     } finally {
-      if (showLoading) setLoading(false);
+      if (showLoading && seq === loadSeq.current) setLoading(false);
     }
   };
 
@@ -202,23 +298,25 @@ export const GitHubDevOpsPage: React.FC = () => {
 
   const handleAnalyzeFailure = async (failureId: string) => {
     setActionLoadingId(`analyze-${failureId}`);
+    setExpandedAnalysisFailureId(failureId);
+    setCardFeedback(prev => ({ ...prev, [failureId]: { text: 'Analyzing GitHub logs and synthesizing 7-part root cause...', type: 'success' } }));
     try {
       const res = await api.analyzeFailure(failureId);
+      setCardFeedback(prev => ({
+        ...prev,
+        [failureId]: { text: `Analysis complete: ${res.root_cause ? res.root_cause.slice(0, 90) + '...' : '7-part diagnosis ready!'}`, type: 'success' }
+      }));
       setStatusMessage({
-        text: `Analysis complete for run: Root cause identified.`,
+        text: `Analysis complete: 7-part root cause and patch plan generated!`,
         type: 'success'
       });
       await loadAllData(false);
-      const updatedFail = (failures || []).find(f => f.id === failureId);
-      if (updatedFail) {
-        setSelectedFailure({
-          ...updatedFail,
-          root_cause: res.root_cause,
-          suggested_fix: res.suggested_fix,
-          status: 'analyzed'
-        });
-      }
+      setExpandedAnalysisFailureId(failureId);
     } catch (err: any) {
+      setCardFeedback(prev => ({
+        ...prev,
+        [failureId]: { text: `Analysis failed: ${err.response?.data?.detail || err.message}`, type: 'error' }
+      }));
       setStatusMessage({
         text: `Analysis failed: ${err.response?.data?.detail || err.message}`,
         type: 'error'
@@ -229,10 +327,73 @@ export const GitHubDevOpsPage: React.FC = () => {
     }
   };
 
+  const handleVerifyProposal = async (proposalId: string) => {
+    setVerifyingProposalId(proposalId);
+    try {
+      const res = await api.verifyProposalResolution(proposalId);
+      const resStatus = res.resolution_status;
+      const isResolved = resStatus === 'VERIFIED_RESOLVED';
+      setStatusMessage({
+        text: isResolved
+          ? `Resolution Verified! Live GitHub Actions workflow confirmed the fix successfully resolved the failure.`
+          : `Verification complete: Status is ${resStatus}. Live workflow results updated.`,
+        type: isResolved ? 'success' : 'error'
+      });
+      await loadAllData(false);
+    } catch (err: any) {
+      setStatusMessage({
+        text: `Resolution verification failed: ${err.response?.data?.detail || err.message}`,
+        type: 'error'
+      });
+    } finally {
+      setVerifyingProposalId(null);
+      setTimeout(() => setStatusMessage(null), 7000);
+    }
+  };
+
+  const handleOpenProposalSolution = async (proposalId: string) => {
+    setIsSolutionModalOpen(true);
+    setSolutionLoading(true);
+    try {
+      const solutionData = await api.getProposalSolution(proposalId);
+      setActiveSolution(solutionData);
+    } catch (err: any) {
+      console.error('Failed to load proposal solution history:', err);
+      setStatusMessage({
+        text: `Failed to load solution history: ${err.response?.data?.detail || err.message}`,
+        type: 'error'
+      });
+    } finally {
+      setSolutionLoading(false);
+    }
+  };
+
+  const handleOpenFailureSolution = async (failureId: string) => {
+    setIsSolutionModalOpen(true);
+    setSolutionLoading(true);
+    try {
+      const solutionData = await api.getFailureSolution(failureId);
+      setActiveSolution(solutionData);
+    } catch (err: any) {
+      console.error('Failed to load failure solution history:', err);
+      setStatusMessage({
+        text: `Failed to load solution history: ${err.response?.data?.detail || err.message}`,
+        type: 'error'
+      });
+    } finally {
+      setSolutionLoading(false);
+    }
+  };
+
   const handleProposeFix = async (failureId: string) => {
     setActionLoadingId(`propose-${failureId}`);
+    setCardFeedback(prev => ({ ...prev, [failureId]: { text: 'Synthesizing code patch and verifying in sandbox...', type: 'success' } }));
     try {
       const res = await api.proposeFix(failureId);
+      setCardFeedback(prev => ({
+        ...prev,
+        [failureId]: { text: res.message || `Fix patch proposed with sandbox verification! Approval gate #${res.approval_id || 'READY'}.`, type: 'success' }
+      }));
       setStatusMessage({
         text: `Patch proposal generated! Created human approval gate #${res.approval_id || 'PENDING'}.`,
         type: 'success'
@@ -240,6 +401,10 @@ export const GitHubDevOpsPage: React.FC = () => {
       await loadAllData(false);
       setActiveTab('proposals');
     } catch (err: any) {
+      setCardFeedback(prev => ({
+        ...prev,
+        [failureId]: { text: `Failed to generate fix proposal: ${err.response?.data?.detail || err.message}`, type: 'error' }
+      }));
       setStatusMessage({
         text: `Failed to generate fix proposal: ${err.response?.data?.detail || err.message}`,
         type: 'error'
@@ -410,15 +575,22 @@ export const GitHubDevOpsPage: React.FC = () => {
               <GitBranch className="w-6 h-6 text-white" />
             </div>
             <div>
-              <div className="flex items-center gap-2.5">
+              <div className="flex flex-wrap items-center gap-2.5">
                 <h1 className="text-2xl font-black text-white">GitHub Intelligence & AI DevOps</h1>
                 <span className={`text-[11px] font-mono font-bold px-2 py-0.5 rounded-full border ${
                   account?.connected 
-                    ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' 
+                    ? (account?.permission_level === 'read_write'
+                        ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                        : 'bg-sky-500/10 text-sky-400 border-sky-500/30')
                     : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
                 }`}>
-                  {account?.connected ? 'Live Connected' : 'Disconnected'}
+                  {account?.permission_label || (account?.connected ? 'Live Connected' : 'Disconnected — Configure GITHUB_TOKEN')}
                 </span>
+                {account?.missing_scopes && account.missing_scopes.length > 0 && (
+                  <span className="text-[10px] font-mono bg-amber-500/10 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-full">
+                    Missing scopes: {account.missing_scopes.join(', ')}
+                  </span>
+                )}
               </div>
               <p className="text-xs text-slate-400 mt-1">
                 Real-time repository telemetry, CI/CD failure analysis, AI patch proposals, and cryptographic human approval gating.
@@ -428,6 +600,11 @@ export const GitHubDevOpsPage: React.FC = () => {
 
           {/* Action buttons */}
           <div className="flex items-center gap-3">
+            {lastSyncTime && (
+              <span className="text-[11px] font-mono text-slate-500 hidden lg:inline-block">
+                Last sync: {lastSyncTime}
+              </span>
+            )}
             <button
               onClick={handleSync}
               disabled={syncing}
@@ -447,7 +624,7 @@ export const GitHubDevOpsPage: React.FC = () => {
         </div>
 
         {/* Connected Account Details Sub-panel */}
-        <div className="bg-slate-950/60 p-4 rounded-xl border border-slate-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="bg-slate-950/60 p-4 rounded-xl border border-slate-800/80 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             {account?.avatar_url ? (
               <img src={account.avatar_url} alt="GitHub avatar" className="w-9 h-9 rounded-full border border-slate-700" />
@@ -476,35 +653,64 @@ export const GitHubDevOpsPage: React.FC = () => {
               </div>
               <p className="text-[11px] text-slate-400 font-mono">
                 {account?.connected 
-                  ? `@${account.login} • ${account.public_repos ?? 0} Public Repositories`
+                  ? `@${account.login} • ${safeRepos.length} Repositories in Scope`
                   : 'Click "Switch / Connect Profile" to connect your GitHub account'}
               </p>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-4 text-xs font-mono">
+          {/* Quick Profile Switcher (if multiple accounts connected) */}
+          {connectedAccounts.length > 1 && (
+            <div className="flex items-center gap-2 bg-slate-900/60 px-3 py-1.5 rounded-xl border border-slate-800">
+              <Users className="w-3.5 h-3.5 text-purple-400" />
+              <span className="text-[11px] text-slate-400 font-mono">Profiles:</span>
+              <div className="flex items-center gap-1.5">
+                {connectedAccounts.map(acc => (
+                  <button
+                    key={acc.id}
+                    onClick={() => handleSwitchAccount(acc.login)}
+                    disabled={switchingAccount || acc.is_active}
+                    className={`flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono transition-all ${
+                      acc.is_active
+                        ? 'bg-purple-600/30 text-purple-200 border border-purple-500/40 font-bold cursor-default'
+                        : 'bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-800'
+                    }`}
+                  >
+                    <span className={`w-1.5 h-1.5 rounded-full ${acc.is_active ? 'bg-emerald-400' : 'bg-slate-600'}`}></span>
+                    <span>@{acc.login}</span>
+                    {acc.is_active && <span className="text-[9px] text-emerald-400 font-sans font-bold">ACTIVE</span>}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center gap-3 text-xs font-mono">
             <div>
-              <span className="text-slate-500">OAuth Scopes:</span>{' '}
+              <span className="text-slate-500">Scopes:</span>{' '}
               <span className="text-purple-300">
                 {account?.scopes && account.scopes.length > 0 ? account.scopes.join(', ') : 'repo, workflow'}
               </span>
             </div>
             <div className="hidden sm:block text-slate-700">|</div>
-            <div className="text-slate-400">
-              {account?.note || 'Verified FastMCP Gateway'}
-            </div>
-            <div className="hidden sm:block text-slate-700">|</div>
-            <button
-              onClick={() => {
-                setConnectError(null);
-                setIsConnectModalOpen(true);
-              }}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-300 hover:text-emerald-200 transition-all shadow-sm"
-              title="Connect another GitHub account with real-time verification"
-            >
-              <KeyRound className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Switch / Connect Profile</span>
-            </button>
+            {currentUser?.role === 'admin' ? (
+              <button
+                onClick={() => {
+                  setConnectError(null);
+                  setIsConnectModalOpen(true);
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-300 hover:text-emerald-200 transition-all shadow-sm"
+                title="Connect another GitHub account with real-time verification"
+              >
+                <KeyRound className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Switch / Connect Profile</span>
+              </button>
+            ) : (
+              <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-900 border border-slate-800 text-slate-400">
+                <Lock className="w-3.5 h-3.5 text-slate-500" />
+                <span>Integration Managed by Admin</span>
+              </span>
+            )}
           </div>
         </div>
       </div>
@@ -522,19 +728,32 @@ export const GitHubDevOpsPage: React.FC = () => {
               {health?.status || 'OPTIMAL'}
             </span>
           </div>
-          <div className="flex items-baseline gap-2">
-            <span className="text-3xl font-black text-white">{health?.overall_health_score ?? 100}%</span>
-            <span className="text-xs text-emerald-400 font-mono">Operational</span>
-          </div>
-          <div className="w-full bg-slate-900 rounded-full h-1.5 overflow-hidden">
-            <div 
-              className={`h-full rounded-full transition-all duration-500 ${
-                (health?.overall_health_score ?? 100) >= 80 ? 'bg-emerald-500' :
-                (health?.overall_health_score ?? 100) >= 50 ? 'bg-amber-500' : 'bg-rose-500'
-              }`}
-              style={{ width: `${health?.overall_health_score ?? 100}%` }}
-            ></div>
-          </div>
+          {health?.overall_health_score !== undefined && health?.overall_health_score !== null ? (
+            <>
+              <div className="flex items-baseline gap-2">
+                <span className="text-3xl font-black text-white">{health.overall_health_score}%</span>
+                <span className="text-xs text-emerald-400 font-mono">Operational</span>
+              </div>
+              <div className="w-full bg-slate-900 rounded-full h-1.5 overflow-hidden">
+                <div 
+                  className={`h-full rounded-full transition-all duration-500 ${
+                    health.overall_health_score >= 80 ? 'bg-emerald-500' :
+                    health.overall_health_score >= 50 ? 'bg-amber-500' : 'bg-rose-500'
+                  }`}
+                  style={{ width: `${health.overall_health_score}%` }}
+                ></div>
+              </div>
+              <p className="text-[10px] text-slate-500 font-mono">
+                Calculated on {health.monitored_repositories_count ?? safeRepos.filter(r => r.is_monitored).length} monitored repos ({health.active_failures_count} failures)
+              </p>
+            </>
+          ) : (
+            <div className="py-2">
+              <p className="text-xs text-amber-300 font-mono">
+                Health score unavailable — insufficient verified data.
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Active Failures */}
@@ -552,7 +771,7 @@ export const GitHubDevOpsPage: React.FC = () => {
           </p>
         </div>
 
-        {/* Monitored Repos */}
+        {/* Monitored Repos & Webhook Ingestion */}
         <div className="glass-panel p-5 rounded-2xl border border-slate-800 space-y-2">
           <div className="flex items-center justify-between text-xs text-slate-400 font-medium">
             <span>Monitored Repos</span>
@@ -564,9 +783,12 @@ export const GitHubDevOpsPage: React.FC = () => {
             </span>
             <span className="text-xs text-slate-400">of {safeRepos.length} total</span>
           </div>
-          <p className="text-[11px] text-slate-500 font-mono">
-            Webhook listener active
-          </p>
+          <div className="flex items-center gap-1.5 text-[11px] font-mono">
+            <span className={`w-2 h-2 rounded-full shrink-0 ${webhookStatus?.is_publicly_reachable ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></span>
+            <span className={webhookStatus?.is_publicly_reachable ? 'text-emerald-400' : 'text-amber-400 truncate'} title={webhookStatus?.guidance}>
+              {webhookStatus?.is_publicly_reachable ? 'Webhook listener live' : 'Localhost (tunnel required)'}
+            </span>
+          </div>
         </div>
 
         {/* Fix Proposals */}
@@ -719,8 +941,12 @@ export const GitHubDevOpsPage: React.FC = () => {
               <CheckCircle2 className="w-12 h-12 text-emerald-400 mx-auto" />
               <h3 className="text-base font-bold text-white">All Monitored Workflows Healthy</h3>
               <p className="text-xs text-slate-400 max-w-md mx-auto">
-                No active CI/CD workflow failures detected. Live GitHub webhooks and reconciliation are listening for pipeline anomalies.
+                No active CI/CD failures found in your connected GitHub repositories.
               </p>
+              <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-full text-[11px] font-mono">
+                <ShieldCheck className="w-3.5 h-3.5" />
+                <span>Verified: Zero pipeline anomalies detected for @{account?.login || 'active account'}</span>
+              </div>
             </div>
           ) : (
             safeFailures.map(failure => {
@@ -793,12 +1019,21 @@ export const GitHubDevOpsPage: React.FC = () => {
                         </div>
                       )}
 
-                      {/* AI Root Cause Analysis (if analyzed) */}
-                      {(failure.root_cause || failure.analysis?.root_cause) && (
+                      {/* AI Root Cause Analysis (if analyzed and panel collapsed) */}
+                      {(failure.root_cause || failure.analysis?.root_cause) && expandedAnalysisFailureId !== failure.id && (
                         <div className="bg-sky-950/20 p-4 rounded-xl border border-sky-500/30 space-y-2 mt-3">
-                          <div className="flex items-center gap-2 text-sky-400 text-xs font-bold uppercase tracking-wider">
-                            <Bot className="w-4 h-4" />
-                            AI Root-Cause Diagnosis
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2 text-sky-400 text-xs font-bold uppercase tracking-wider">
+                              <Bot className="w-4 h-4" />
+                              <span>AI Root-Cause Diagnosis</span>
+                            </div>
+                            <button
+                              onClick={() => setExpandedAnalysisFailureId(failure.id)}
+                              className="text-xs text-cyan-400 hover:text-cyan-300 font-semibold flex items-center gap-1"
+                            >
+                              <span>View Full 7-Part Analysis</span>
+                              <ArrowRight className="w-3.5 h-3.5" />
+                            </button>
                           </div>
                           <p className="text-xs text-slate-200 leading-relaxed font-mono">
                             {failure.root_cause || failure.analysis?.root_cause}
@@ -810,17 +1045,75 @@ export const GitHubDevOpsPage: React.FC = () => {
                           )}
                         </div>
                       )}
+
+                      {/* Expanded 7-Part AI Issue Analysis Panel */}
+                      {(expandedAnalysisFailureId === failure.id || isAnalyzing) && (
+                        <div className="mt-4">
+                          <AIIssueAnalysisPanel
+                            failure={failure}
+                            analysis={failure.structured_analysis || (failure.analysis?.structured_analysis ?? null)}
+                            isLoading={isAnalyzing}
+                            onAnalyzeAgain={() => handleAnalyzeFailure(failure.id)}
+                            onProposeFix={() => handleProposeFix(failure.id)}
+                            onReviewInApprovalCenter={() => navigate('/approvals')}
+                            hasProposal={Boolean(failure.fix_proposal)}
+                          />
+                        </div>
+                      )}
                     </div>
+
+                    {cardFeedback[failure.id] && (
+                      <div className={`p-2.5 rounded-xl text-xs flex items-center justify-between animate-fade-in ${
+                        cardFeedback[failure.id].type === 'success'
+                          ? 'bg-emerald-500/15 border border-emerald-500/30 text-emerald-300'
+                          : 'bg-rose-500/15 border border-rose-500/30 text-rose-300'
+                      }`}>
+                        <div className="flex items-center gap-1.5">
+                          {cardFeedback[failure.id].type === 'success' ? (
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                          ) : (
+                            <AlertTriangle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                          )}
+                          <span>{cardFeedback[failure.id].text}</span>
+                        </div>
+                        <button
+                          onClick={() => setCardFeedback(prev => { const n = { ...prev }; delete n[failure.id]; return n; })}
+                          className="text-[10px] text-slate-400 hover:text-white ml-2"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    )}
 
                     {/* Action buttons */}
                     <div className="flex lg:flex-col gap-2 shrink-0">
                       <button
+                        id={`btn-analyze-ai-${failure.id}`}
                         onClick={() => handleAnalyzeFailure(failure.id)}
                         disabled={isAnalyzing}
-                        className="flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-sky-500/10 border border-sky-500/30 text-sky-300 hover:bg-sky-500/20 transition-colors disabled:opacity-50"
+                        className="flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-cyan-500/15 border border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/25 transition-colors disabled:opacity-50 shadow-sm"
                       >
-                        <Bot className={`w-3.5 h-3.5 ${isAnalyzing ? 'animate-spin' : ''}`} />
+                        <Sparkles className={`w-3.5 h-3.5 ${isAnalyzing ? 'animate-spin text-cyan-400' : 'text-cyan-400'}`} />
                         <span>{isAnalyzing ? 'Analyzing...' : 'Analyze with AI'}</span>
+                      </button>
+
+                      {failure.structured_analysis && (
+                        <button
+                          onClick={() => setExpandedAnalysisFailureId(expandedAnalysisFailureId === failure.id ? null : failure.id)}
+                          className="flex items-center justify-center gap-1 px-3 py-1.5 rounded-xl text-xs font-medium bg-slate-900 text-slate-300 hover:text-white border border-slate-700 transition-colors"
+                        >
+                          <FileCode className="w-3.5 h-3.5 text-cyan-400" />
+                          <span>{expandedAnalysisFailureId === failure.id ? 'Collapse Analysis' : 'Show AI Panel'}</span>
+                        </button>
+                      )}
+
+                      <button
+                        onClick={() => handleOpenFailureSolution(failure.id)}
+                        className="flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:border-slate-700 transition-colors"
+                        title="View complete evidence-based issue analysis and solution history"
+                      >
+                        <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>View Solution</span>
                       </button>
 
                       <button
@@ -832,15 +1125,17 @@ export const GitHubDevOpsPage: React.FC = () => {
                         <span>{isProposing ? 'Generating...' : 'Propose AI Code Fix'}</span>
                       </button>
 
-                      <button
-                        onClick={() => handleDeleteFailure(failure.id)}
-                        disabled={actionLoadingId === `del-fail-${failure.id}`}
-                        className="flex items-center justify-center gap-1 px-3 py-1.5 rounded-xl text-xs font-medium text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 border border-slate-800 hover:border-rose-500/30 transition-colors"
-                        title="Dismiss and remove this failure record"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span>Dismiss</span>
-                      </button>
+                      {currentUser?.role === 'admin' && (
+                        <button
+                          onClick={() => handleDeleteFailure(failure.id)}
+                          disabled={actionLoadingId === `del-fail-${failure.id}`}
+                          className="flex items-center justify-center gap-1 px-3 py-1.5 rounded-xl text-xs font-medium text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 border border-slate-800 hover:border-rose-500/30 transition-colors"
+                          title="Dismiss and remove this failure record"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Dismiss</span>
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -864,24 +1159,79 @@ export const GitHubDevOpsPage: React.FC = () => {
           ) : (
             safeProposals.map(proposal => {
               const isExecuting = actionLoadingId === `exec-${proposal.id}`;
-              const isDeadPr = proposal.pr_url?.endsWith('/pull/101') || proposal.pr_number === 101;
-              const effectivePrUrl = isDeadPr 
-                ? `https://github.com/${proposal.repo_name || proposal.repo_full_name}/pulls`
-                : proposal.pr_url;
-              const isValidPr = effectivePrUrl && !effectivePrUrl.includes('enterprise-ops') && effectivePrUrl.startsWith('https://github.com/');
+              const prStatus = proposal.pr_status || (proposal.pr_number ? 'OPEN' : 'NOT_CREATED');
+              const hasValidPrUrl = proposal.pr_url && proposal.pr_url.startsWith('https://github.com/') && !proposal.pr_url.includes('enterprise-ops') && proposal.pr_number;
 
               return (
                 <div key={proposal.id} className="glass-panel p-6 rounded-2xl border border-slate-800 space-y-4">
                   <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
                     <div className="space-y-1">
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        {/* Fix Execution Status */}
                         <span className={`text-[10px] font-mono uppercase font-bold px-2 py-0.5 rounded ${
                           proposal.status === 'applied' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' :
                           proposal.status === 'approved' ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30' :
+                          proposal.status === 'failed' ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30' :
                           'bg-amber-500/20 text-amber-300 border border-amber-500/30'
                         }`}>
-                          {proposal.status}
+                          Fix: {proposal.status}
                         </span>
+
+                        {/* GitHub PR Status */}
+                        {prStatus === 'OPEN' && (
+                          <span className="text-[10px] font-mono uppercase font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
+                            <GitPullRequest className="w-3 h-3" />
+                            <span>PR #{proposal.pr_number} • OPEN</span>
+                          </span>
+                        )}
+                        {prStatus === 'MERGED' && (
+                          <span className="text-[10px] font-mono uppercase font-bold px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 flex items-center gap-1">
+                            <GitPullRequest className="w-3 h-3" />
+                            <span>PR #{proposal.pr_number} • MERGED</span>
+                          </span>
+                        )}
+                        {prStatus === 'CLOSED' && (
+                          <span className="text-[10px] font-mono uppercase font-bold px-2 py-0.5 rounded bg-slate-500/20 text-slate-300 border border-slate-500/30 flex items-center gap-1">
+                            <GitPullRequest className="w-3 h-3" />
+                            <span>PR #{proposal.pr_number} • CLOSED</span>
+                          </span>
+                        )}
+                        {prStatus === 'NOT_CREATED' && (
+                          <span className="text-[10px] font-mono uppercase font-medium px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">
+                            PR: NOT CREATED
+                          </span>
+                        )}
+                        {prStatus === 'ERROR' && (
+                          <span className="text-[10px] font-mono uppercase font-bold px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/30">
+                            PR: ERROR
+                          </span>
+                        )}
+                        {prStatus === 'UNKNOWN' && (
+                          <span className="text-[10px] font-mono uppercase font-medium px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">
+                            PR: UNVERIFIED
+                          </span>
+                        )}
+
+                        {/* Resolution Verification Status */}
+                        {proposal.resolution_status === 'VERIFIED_RESOLVED' && (
+                          <span className="text-[10px] font-mono uppercase font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center gap-1">
+                            <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                            <span>VERIFIED RESOLVED</span>
+                          </span>
+                        )}
+                        {proposal.resolution_status === 'STILL_FAILING' && (
+                          <span className="text-[10px] font-mono uppercase font-bold px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40 flex items-center gap-1">
+                            <AlertTriangle className="w-3 h-3 text-rose-400" />
+                            <span>STILL FAILING</span>
+                          </span>
+                        )}
+                        {(!proposal.resolution_status || proposal.resolution_status === 'NOT_VERIFIED') && proposal.status === 'applied' && (
+                          <span className="text-[10px] font-mono uppercase font-medium px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 flex items-center gap-1">
+                            <Clock className="w-3 h-3 text-amber-400" />
+                            <span>NOT VERIFIED</span>
+                          </span>
+                        )}
+
                         <h3 className="text-base font-bold text-white">{proposal.title}</h3>
                       </div>
                       <p className="text-xs text-slate-300">
@@ -890,15 +1240,25 @@ export const GitHubDevOpsPage: React.FC = () => {
                       <div className="flex flex-wrap items-center gap-3 text-xs font-mono text-slate-400 pt-1">
                         <span>Target Repo: <strong className="text-white">{proposal.repo_name || proposal.repo_full_name}</strong></span>
                         <span>Fix Branch: <code className="text-purple-300">{proposal.branch_name}</code></span>
-                        {isValidPr && (
+                        {proposal.workflow_run_id && (
+                          <span>Workflow Run: <code className="text-sky-300">#{proposal.workflow_run_id}</code></span>
+                        )}
+                        {proposal.commit_sha && (
+                          <span>Commit: <code className="text-slate-400">{proposal.commit_sha.slice(0, 8)}</code></span>
+                        )}
+                        {hasValidPrUrl && (
                           <a 
-                            href={effectivePrUrl} 
+                            href={proposal.pr_url!} 
                             target="_blank" 
                             rel="noreferrer" 
-                            className="flex items-center gap-1 text-emerald-400 hover:text-emerald-300 font-bold"
+                            className={`flex items-center gap-1 font-bold ${
+                              prStatus === 'MERGED' ? 'text-purple-400 hover:text-purple-300' :
+                              prStatus === 'CLOSED' ? 'text-slate-400 hover:text-slate-300' :
+                              'text-emerald-400 hover:text-emerald-300'
+                            }`}
                           >
                             <GitPullRequest className="w-3.5 h-3.5" />
-                            <span>{isDeadPr ? 'Repository Pulls' : `PR #${proposal.pr_number || ''}`}</span>
+                            <span>PR #{proposal.pr_number} ({prStatus})</span>
                             <ExternalLink className="w-3 h-3" />
                           </a>
                         )}
@@ -907,6 +1267,29 @@ export const GitHubDevOpsPage: React.FC = () => {
 
                     {/* Actions */}
                     <div className="flex items-center gap-2 shrink-0">
+                      {/* View Solution History Button */}
+                      <button
+                        onClick={() => handleOpenProposalSolution(proposal.id)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/40 transition-colors shadow-sm"
+                        title="View complete evidence-based issue analysis and solution history"
+                      >
+                        <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+                        <span>View Solution</span>
+                      </button>
+
+                      {/* Verify Resolution Button */}
+                      {(proposal.status === 'applied' || prStatus === 'MERGED' || prStatus === 'OPEN') && (
+                        <button
+                          onClick={() => handleVerifyProposal(proposal.id)}
+                          disabled={verifyingProposalId === proposal.id}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 border border-purple-500/40 transition-colors disabled:opacity-50"
+                          title="Query live GitHub Actions workflows to verify if the fix resolved the error"
+                        >
+                          <RefreshCw className={`w-3.5 h-3.5 ${verifyingProposalId === proposal.id ? 'animate-spin text-purple-400' : ''}`} />
+                          <span>{verifyingProposalId === proposal.id ? 'Verifying...' : 'Verify Resolution'}</span>
+                        </button>
+                      )}
+
                       {proposal.status !== 'applied' && (
                         <>
                           <button
@@ -917,39 +1300,86 @@ export const GitHubDevOpsPage: React.FC = () => {
                             <span>Review in Approval Center</span>
                           </button>
 
-                          <button
-                            onClick={() => handleExecuteProposal(proposal.id)}
-                            disabled={isExecuting}
-                            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold bg-emerald-500 text-slate-950 hover:bg-emerald-400 transition-colors disabled:opacity-50"
-                          >
-                            <Play className={`w-3.5 h-3.5 ${isExecuting ? 'animate-spin' : ''}`} />
-                            <span>{isExecuting ? 'Applying...' : 'Apply Approved Fix'}</span>
-                          </button>
+                          {currentUser?.role === 'admin' ? (
+                            <button
+                              onClick={() => handleExecuteProposal(proposal.id)}
+                              disabled={isExecuting}
+                              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold bg-emerald-500 text-slate-950 hover:bg-emerald-400 transition-colors disabled:opacity-50"
+                            >
+                              <Play className={`w-3.5 h-3.5 ${isExecuting ? 'animate-spin' : ''}`} />
+                              <span>{isExecuting ? 'Applying...' : 'Apply Approved Fix'}</span>
+                            </button>
+                          ) : (
+                            <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-900 border border-slate-800 text-slate-400">
+                              <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
+                              <span>Awaiting Admin Approval</span>
+                            </span>
+                          )}
                         </>
                       )}
 
-                      {proposal.status === 'applied' && isValidPr && (
-                        <a
-                          href={effectivePrUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold bg-purple-600/20 text-purple-300 border border-purple-500/30 hover:bg-purple-600/30 transition-colors"
-                        >
-                          <GitPullRequest className="w-3.5 h-3.5" />
-                          <span>{isDeadPr ? 'View Repository Pulls' : 'View Open Pull Request'}</span>
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
+                      {proposal.status === 'applied' && (
+                        <>
+                          {prStatus === 'OPEN' && hasValidPrUrl && (
+                            <a
+                              href={proposal.pr_url!}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold bg-emerald-600/20 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-600/30 transition-colors"
+                            >
+                              <GitPullRequest className="w-3.5 h-3.5" />
+                              <span>View Open Pull Request</span>
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+                          )}
+                          {prStatus === 'MERGED' && hasValidPrUrl && (
+                            <a
+                              href={proposal.pr_url!}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold bg-purple-600/20 text-purple-300 border border-purple-500/30 hover:bg-purple-600/30 transition-colors"
+                            >
+                              <GitPullRequest className="w-3.5 h-3.5" />
+                              <span>View Merged Pull Request</span>
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+                          )}
+                          {prStatus === 'CLOSED' && hasValidPrUrl && (
+                            <a
+                              href={proposal.pr_url!}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold bg-slate-700/30 text-slate-300 border border-slate-600/30 hover:bg-slate-700/50 transition-colors"
+                            >
+                              <GitPullRequest className="w-3.5 h-3.5" />
+                              <span>View Closed Pull Request</span>
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+                          )}
+                          {prStatus === 'NOT_CREATED' && (
+                            <span className="px-3 py-1.5 rounded-lg text-xs font-medium text-slate-400 bg-slate-900 border border-slate-800">
+                              No Pull Request Created
+                            </span>
+                          )}
+                          {prStatus === 'ERROR' && (
+                            <span className="px-3 py-1.5 rounded-lg text-xs font-medium text-rose-400 bg-rose-950/30 border border-rose-900/50">
+                              PR Error
+                            </span>
+                          )}
+                        </>
                       )}
 
-                      <button
-                        onClick={() => handleDeleteProposal(proposal.id)}
-                        disabled={actionLoadingId === `del-prop-${proposal.id}`}
-                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 border border-slate-800 hover:border-rose-500/30 transition-colors"
-                        title="Dismiss and remove this fix proposal"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span className="hidden sm:inline">Dismiss</span>
-                      </button>
+                      {currentUser?.role === 'admin' && (
+                        <button
+                          onClick={() => handleDeleteProposal(proposal.id)}
+                          disabled={actionLoadingId === `del-prop-${proposal.id}`}
+                          className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 border border-slate-800 hover:border-rose-500/30 transition-colors"
+                          title="Dismiss and remove this fix proposal"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span className="hidden sm:inline">Dismiss</span>
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -1011,13 +1441,26 @@ export const GitHubDevOpsPage: React.FC = () => {
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="space-y-1">
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <h4 className="font-bold text-white text-sm">{repo.name}</h4>
-                      {repo.private && (
-                        <span className="text-[9px] font-mono uppercase bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded">
-                          Private
+                      {repo.private ? (
+                        <span className="text-[9px] font-mono uppercase bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded flex items-center gap-1">
+                          <Lock className="w-2.5 h-2.5" />
+                          <span>Private</span>
+                        </span>
+                      ) : (
+                        <span className="text-[9px] font-mono uppercase bg-slate-800/60 text-slate-400 px-1.5 py-0.5 rounded flex items-center gap-1">
+                          <Unlock className="w-2.5 h-2.5" />
+                          <span>Public</span>
                         </span>
                       )}
+                      <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded border ${
+                        repo.can_push 
+                          ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' 
+                          : 'bg-sky-500/10 text-sky-400 border-sky-500/30'
+                      }`}>
+                        {repo.permission_label || (repo.can_push ? 'Read/Write' : 'Read-Only')}
+                      </span>
                     </div>
                     <p className="text-[11px] text-slate-400 font-mono">{repo.full_name}</p>
                   </div>
@@ -1039,7 +1482,14 @@ export const GitHubDevOpsPage: React.FC = () => {
 
                 <div className="flex items-center justify-between text-xs font-mono text-slate-500 mt-4 pt-3 border-t border-slate-800">
                   <span className="text-purple-300">branch: {repo.default_branch || 'main'}</span>
-                  <span className="text-emerald-400">{repo.health_score ?? 100}% Health</span>
+                  <button
+                    onClick={() => handleInspectRepo(repo)}
+                    disabled={overviewLoading}
+                    className="flex items-center gap-1 text-[11px] text-emerald-400 hover:text-emerald-300 hover:underline transition-colors cursor-pointer"
+                  >
+                    <Eye className="w-3 h-3" />
+                    <span>{overviewLoading ? 'Inspecting...' : 'Inspect Live'}</span>
+                  </button>
                 </div>
               </div>
             ))}
@@ -1132,9 +1582,59 @@ export const GitHubDevOpsPage: React.FC = () => {
               </div>
             )}
 
+            {connectedAccounts.length > 0 && (
+              <div className="space-y-2 pb-3 border-b border-slate-800">
+                <label className="block text-slate-300 font-medium font-mono text-[11px] uppercase tracking-wider">
+                  Existing Connected Profiles ({connectedAccounts.length})
+                </label>
+                <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                  {connectedAccounts.map(acc => (
+                    <div 
+                      key={acc.id} 
+                      className={`p-2.5 rounded-xl border flex items-center justify-between text-xs ${
+                        acc.is_active 
+                          ? 'bg-purple-950/20 border-purple-500/40 text-purple-200' 
+                          : 'bg-slate-900/40 border-slate-800 text-slate-300'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className={`w-2 h-2 rounded-full ${acc.is_active ? 'bg-emerald-400' : 'bg-slate-600'}`}></span>
+                        <span className="font-bold font-mono">@{acc.login}</span>
+                        {acc.is_active && (
+                          <span className="text-[10px] font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.2 rounded-full">
+                            Active Scope
+                          </span>
+                        )}
+                        <span className="text-[10px] text-slate-400 font-mono">({acc.monitored_repositories_count} monitored)</span>
+                      </div>
+                      {!acc.is_active && (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            await handleSwitchAccount(acc.login);
+                            setIsConnectModalOpen(false);
+                          }}
+                          disabled={switchingAccount}
+                          className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-purple-600 hover:bg-purple-500 text-white transition-colors"
+                        >
+                          Switch
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <form onSubmit={handleConnectSubmit} className="space-y-4 text-xs">
               <div>
-                <label className="block text-slate-300 font-medium mb-1">
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-slate-300 font-medium">
+                    Connect Another Profile
+                  </label>
+                  <span className="text-[10px] text-slate-500 font-mono">Enter credentials</span>
+                </div>
+                <label className="block text-slate-400 font-normal mb-1">
                   GitHub Username or Email <span className="text-rose-400">*</span>
                 </label>
                 <input
@@ -1236,6 +1736,187 @@ export const GitHubDevOpsPage: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Live Repository Overview Modal */}
+      {selectedRepoOverview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fade-in">
+          <div className="glass-panel w-full max-w-2xl p-6 rounded-2xl border border-slate-700/80 shadow-2xl space-y-5 bg-[#0b1120] max-h-[85vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-purple-500/20 text-purple-400 border border-purple-500/30 flex items-center justify-center">
+                  <GitBranch className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base font-bold text-white">{selectedRepoOverview.full_name}</h3>
+                    <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full border ${
+                      selectedRepoOverview.permissions.can_push
+                        ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                        : 'bg-sky-500/10 text-sky-400 border-sky-500/30'
+                    }`}>
+                      {selectedRepoOverview.permissions.permission_label}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 font-mono">
+                    Default Branch: {selectedRepoOverview.default_branch} • {selectedRepoOverview.private ? 'Private' : 'Public'}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setSelectedRepoOverview(null)}
+                className="p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Description */}
+            {selectedRepoOverview.description && (
+              <p className="text-xs text-slate-300 bg-slate-900/60 p-3 rounded-xl border border-slate-800">
+                {selectedRepoOverview.description}
+              </p>
+            )}
+
+            {/* Latest Commit */}
+            <div className="space-y-2">
+              <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider font-mono flex items-center gap-1.5">
+                <GitCommit className="w-3.5 h-3.5 text-purple-400" />
+                <span>Latest Commit on {selectedRepoOverview.default_branch}</span>
+              </h4>
+              {selectedRepoOverview.latest_commit ? (
+                <div className="bg-slate-900/60 p-3 rounded-xl border border-slate-800 space-y-1 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="font-mono text-purple-300 font-bold">{selectedRepoOverview.latest_commit.sha}</span>
+                    <span className="text-[11px] text-slate-500 font-mono">{selectedRepoOverview.latest_commit.date ? new Date(selectedRepoOverview.latest_commit.date).toLocaleString() : ''}</span>
+                  </div>
+                  <p className="text-slate-200">{selectedRepoOverview.latest_commit.message}</p>
+                  <p className="text-[11px] text-slate-400 font-mono">Author: {selectedRepoOverview.latest_commit.author}</p>
+                </div>
+              ) : (
+                <p className="text-xs text-slate-500 font-mono">No commits found.</p>
+              )}
+            </div>
+
+            {/* Recent Workflow Runs */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider font-mono flex items-center gap-1.5">
+                  <Play className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Recent CI/CD Workflow Runs ({selectedRepoOverview.recent_workflow_runs_count})</span>
+                </h4>
+              </div>
+              {selectedRepoOverview.recent_workflow_runs.length === 0 ? (
+                <div className="p-3 bg-slate-900/40 rounded-xl border border-slate-800/80 text-xs text-slate-400 font-mono">
+                  {selectedRepoOverview.runs_message || 'No workflow runs found on GitHub.'}
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
+                  {selectedRepoOverview.recent_workflow_runs.map(run => (
+                    <div key={run.id} className="p-2.5 bg-slate-900/50 rounded-xl border border-slate-800/80 flex items-center justify-between text-xs">
+                      <div className="space-y-0.5">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-white">{run.name || 'Workflow Run'}</span>
+                          <span className="text-[10px] font-mono text-slate-500">#{run.id}</span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 font-mono">event: {run.event} • branch: {run.head_branch}</p>
+                      </div>
+                      <span className={`text-[10px] font-mono uppercase font-bold px-2 py-0.5 rounded ${
+                        run.conclusion === 'success' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' :
+                        run.conclusion === 'failure' ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30' :
+                        'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                      }`}>
+                        {run.conclusion || run.status || 'running'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Open Pull Requests & Issues */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* Open PRs */}
+              <div className="space-y-2">
+                <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider font-mono flex items-center gap-1.5">
+                  <GitPullRequest className="w-3.5 h-3.5 text-sky-400" />
+                  <span>Open PRs ({selectedRepoOverview.open_pull_requests_count})</span>
+                </h4>
+                {selectedRepoOverview.open_pull_requests.length === 0 ? (
+                  <p className="text-xs text-slate-500 font-mono p-2.5 bg-slate-900/30 rounded-xl border border-slate-800">
+                    {selectedRepoOverview.prs_message || 'No open pull requests found.'}
+                  </p>
+                ) : (
+                  <div className="space-y-1.5 max-h-36 overflow-y-auto">
+                    {selectedRepoOverview.open_pull_requests.map(pr => (
+                      <div key={pr.number} className="p-2 bg-slate-900/40 rounded-lg border border-slate-800 text-xs">
+                        <span className="text-sky-300 font-bold font-mono mr-1.5">#{pr.number}</span>
+                        <span className="text-slate-200">{pr.title}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Open Issues */}
+              <div className="space-y-2">
+                <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider font-mono flex items-center gap-1.5">
+                  <AlertOctagon className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Open Issues ({selectedRepoOverview.open_issues_count})</span>
+                </h4>
+                {selectedRepoOverview.open_issues.length === 0 ? (
+                  <p className="text-xs text-slate-500 font-mono p-2.5 bg-slate-900/30 rounded-xl border border-slate-800">
+                    {selectedRepoOverview.issues_message || 'No open issues found.'}
+                  </p>
+                ) : (
+                  <div className="space-y-1.5 max-h-36 overflow-y-auto">
+                    {selectedRepoOverview.open_issues.map(iss => (
+                      <div key={iss.number} className="p-2 bg-slate-900/40 rounded-lg border border-slate-800 text-xs">
+                        <span className="text-amber-300 font-bold font-mono mr-1.5">#{iss.number}</span>
+                        <span className="text-slate-200">{iss.title}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="pt-3 border-t border-slate-800 flex items-center justify-between">
+              <a
+                href={selectedRepoOverview.html_url}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center gap-1.5 text-xs text-purple-300 hover:text-purple-200 font-mono"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                <span>View on GitHub</span>
+              </a>
+              <button
+                onClick={() => setSelectedRepoOverview(null)}
+                className="px-4 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-white transition-colors"
+              >
+                Close Inspector
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Detailed Solution History Modal */}
+      <ViewSolutionModal
+        isOpen={isSolutionModalOpen}
+        onClose={() => setIsSolutionModalOpen(false)}
+        solution={activeSolution}
+        isLoading={solutionLoading}
+        onVerifyAgain={activeSolution?.pr_details?.branch ? async () => {
+          // If we have an active proposal or failure, trigger re-verification
+          const propId = (proposals || []).find(p => p.branch_name === activeSolution.pr_details?.branch || p.title === activeSolution.issue_overview?.title)?.id;
+          if (propId) {
+            await handleVerifyProposal(propId);
+            await handleOpenProposalSolution(propId);
+          }
+        } : undefined}
+      />
     </div>
   );
 };

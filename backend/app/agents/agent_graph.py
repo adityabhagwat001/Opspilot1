@@ -22,6 +22,7 @@ class OpsAgentState(TypedDict):
     execution_id: str
     conversation_id: str
     user_id: str
+    user_role: Optional[str]
     workspace_id: str
     user_request: str
     conversation_history: List[Dict[str, str]]
@@ -148,11 +149,12 @@ async def synthesize_with_llm(
         "PostgreSQL operational databases, GitHub repositories, CI/CD pipelines, emails, and meetings.\n\n"
         "Guidelines:\n"
         "1. Directly, helpfully, and conversationally answer the user's specific prompt.\n"
-        "2. Ground every single claim on the live tool data provided below. Never invent records, PRs, or commits.\n"
-        "3. If the user asks whether there are errors in their git repos, clearly state the CI/CD pipeline and issue status.\n"
-        "4. If operational incidents were inspected, include a '### Live Operational Findings' section with incident details.\n"
-        "5. If a write action was proposed, clearly inform the user that it has paused at the '### Human Approval Required — Write Operation Paused' boundary for explicit review.\n"
-        "6. Use clear, modern markdown with bullet points, bold highlights, and code blocks."
+        "2. Ground every single claim on the live tool data provided below. STRICTLY NEVER invent fake records, fake PR numbers (like #43), fake commits, or broken URLs.\n"
+        "3. If the tool data shows 0 pull requests or empty records, explicitly confirm to the user that 0 pull requests exist in that repository. Never fabricate pull requests.\n"
+        "4. If the user asks whether there are errors in their git repos, clearly state the CI/CD pipeline and issue status.\n"
+        "5. If operational incidents were inspected, include a '### Live Operational Findings' section with incident details.\n"
+        "6. If a write action was proposed, clearly inform the user that it has paused at the '### Human Approval Required — Write Operation Paused' boundary for explicit review.\n"
+        "7. Use clear, modern markdown with bullet points, bold highlights, and code blocks."
     )
 
     user_prompt = (
@@ -288,7 +290,7 @@ async def understand_request_node(state: OpsAgentState) -> Dict[str, Any]:
 
     # 4. Multi-system identification
     systems = []
-    if any(k in req for k in ["incident", "database", "task", "operational", "record", "db", "remediation", "postgres"]):
+    if any(k in req for k in ["incident", "database", "task", "operational", "record", "db", "remediation", "postgres", "schema", "table", "tables", "sql", "query", "select"]):
         systems.append("postgresql")
     if any(k in req for k in ["github", "git", "issue", "repo", "repository", "repos", "pull request", "pr", "commit", "workflow", "ci/cd", "actions", "build", "pipeline", "activity", "activities", "diff"]):
         systems.append("github")
@@ -311,7 +313,10 @@ async def understand_request_node(state: OpsAgentState) -> Dict[str, Any]:
         systems = ["postgresql"]
 
     # Classify whether this involves a write action proposal
-    is_write_intent = any(k in req for k in ["create", "update", "schedule", "send", "draft", "cancel", "close", "remediate"])
+    is_write_intent = any(k in req for k in [
+        "create", "update", "schedule", "send", "draft", "cancel", "close", "remediate",
+        "want pr", "want a pr", "make pr", "make a pr", "open pr", "open a pr", "submit pr", "propose pr"
+    ])
     intent = "action_proposal" if is_write_intent else "operational_query"
 
     return {
@@ -380,6 +385,27 @@ async def plan_actions_node(state: OpsAgentState) -> Dict[str, Any]:
                     "is_write": False,
                     "description": "Query PostgreSQL for open incidents"
                 })
+        elif any(k in req for k in ["schema", "tables", "columns", "structure", "inspect db", "inspect database"]):
+            planned.append({
+                "tool": "inspect_database_schema",
+                "system": "postgresql",
+                "args": {"workspace_id": state.get("workspace_id", "default-ops")},
+                "is_write": False,
+                "description": "Inspect operations database schema, tables, and column structures"
+            })
+        elif any(k in req for k in ["record", "records", "query", "select", "rows", "database records", "latest records", "records in my database"]):
+            sql_match = re.search(r"\b(SELECT\s+.+?)(?:;|$)", state["user_request"], re.IGNORECASE | re.DOTALL)
+            if sql_match:
+                sql_query = sql_match.group(1).strip()
+            else:
+                sql_query = "SELECT id, title, severity, status, service, created_at FROM operational_incidents ORDER BY created_at DESC LIMIT 5"
+            planned.append({
+                "tool": "execute_read_only_query",
+                "system": "postgresql",
+                "args": {"query": sql_query, "max_rows": 10, "workspace_id": state.get("workspace_id", "default-ops")},
+                "is_write": False,
+                "description": f"Execute safe read-only SQL query on authorized database"
+            })
         elif any(k in req for k in ["summary", "health", "overview", "system status"]):
             planned.append({
                 "tool": "get_operations_summary",
@@ -403,6 +429,15 @@ async def plan_actions_node(state: OpsAgentState) -> Dict[str, Any]:
                 },
                 "is_write": True,
                 "summary": f"Create operational task: '{task_title}' (Priority: P1)"
+            })
+        else:
+            # Default fallback for general database queries
+            planned.append({
+                "tool": "list_incidents",
+                "system": "postgresql",
+                "args": {"status": "open", "workspace_id": state.get("workspace_id", "default-ops")},
+                "is_write": False,
+                "description": "Query PostgreSQL for active operational incidents"
             })
 
     # -------------------------------------------------------------------------
@@ -535,7 +570,36 @@ async def plan_actions_node(state: OpsAgentState) -> Dict[str, Any]:
                 "is_write": False,
                 "description": "List repositories from authenticated GitHub account"
             })
-        # 7. Pull requests listing
+        # 7. Pull Request Creation Proposal (Protected Write Action -> Gates at Human Approval)
+        elif any(k in req for k in [
+            "want pr", "want a pr", "create pr", "create a pr", "open pr", "open a pr",
+            "make pr", "make a pr", "submit pr", "propose pr", "new pr", "create pull request",
+            "open pull request", "make pull request"
+        ]):
+            branch_name = f"opspilot-patch/{repo}-update"
+            pr_title = f"fix({repo}): operational improvements and updates"
+            pr_body = (
+                f"Automated Pull Request proposed by OpsPilot AI Operations Assistant for `{owner}/{repo}`.\n\n"
+                f"**Request:** `{state['user_request']}`\n"
+                f"**Branch:** `{branch_name}` -> `main`\n\n"
+                f"This pull request is paused at the Human Approval boundary and requires operator confirmation before remote push."
+            )
+            planned.append({
+                "tool": "create_pull_request",
+                "system": "github",
+                "args": {
+                    "owner": owner,
+                    "repo": repo,
+                    "title": pr_title,
+                    "body": pr_body,
+                    "head": branch_name,
+                    "base": "main",
+                    "patch_files": [{"path": "README.md", "content": f"# {repo}\n\nAutomated updates staged by OpsPilot.\n"}]
+                },
+                "is_write": True,
+                "summary": f"Create branch '{branch_name}' and submit Pull Request in '{owner}/{repo}'"
+            })
+        # 8. Pull requests listing (Read Action)
         elif "pull request" in req or "pr" in req:
             planned.append({
                 "tool": "list_pull_requests",
@@ -544,7 +608,35 @@ async def plan_actions_node(state: OpsAgentState) -> Dict[str, Any]:
                 "is_write": False,
                 "description": f"List open pull requests in {owner}/{repo}"
             })
-        # 8. Issue listing, diagnostic & automated solving
+        # 8. Issue creation (Explicit Write Action -> Gates at Human Approval)
+        elif any(k in req for k in ["create an issue", "create issue", "file an issue", "file issue", "new issue"]) or ("create" in req and "issue" in req):
+            inc_info = extract_incident_from_history(history, state["user_request"])
+            issue_title = f"Fix: {inc_info['title']}"
+            issue_body = (
+                f"Automated remediation ticket proposed by OpsPilot AI Operations Assistant.\n\n"
+                f"**Correlated Incident:** {inc_info['id']}\n"
+                f"**Severity:** {inc_info['severity'].upper()}\n"
+                f"**Service:** `{inc_info['service']}`\n\n"
+                f"**Action Plan:** Investigate root cause and apply connection pool scaling/timeout fixes."
+            )
+            issue_labels = ["critical", "incident", "database", inc_info["service"]]
+            target_repo = repo
+            if inc_info and inc_info.get("service") and not (settings.GITHUB_DEFAULT_REPO and settings.GITHUB_DEFAULT_REPO != "auth-service"):
+                target_repo = inc_info.get("service")
+            planned.append({
+                "tool": "create_issue",
+                "system": "github",
+                "args": {
+                    "owner": owner,
+                    "repo": target_repo,
+                    "title": issue_title,
+                    "body": issue_body,
+                    "labels": issue_labels
+                },
+                "is_write": True,
+                "summary": f"Create GitHub issue '{issue_title}' in '{owner}/{target_repo}'"
+            })
+        # 9. Issue listing, diagnostic & automated solving
         elif "issue" in req or any(k in req for k in ["solve", "fix issue", "resolve issue"]):
             if any(k in req for k in ["highest priority", "priority", "most critical", "rank"]):
                 planned.append({
@@ -591,34 +683,6 @@ async def plan_actions_node(state: OpsAgentState) -> Dict[str, Any]:
                     "is_write": False,
                     "description": f"List open issues in {owner}/{repo}"
                 })
-        # 9. Issue creation
-        elif "create" in req and "issue" in req:
-            inc_info = extract_incident_from_history(history, state["user_request"])
-            issue_title = f"Fix: {inc_info['title']}"
-            issue_body = (
-                f"Automated remediation ticket proposed by OpsPilot AI Operations Assistant.\n\n"
-                f"**Correlated Incident:** {inc_info['id']}\n"
-                f"**Severity:** {inc_info['severity'].upper()}\n"
-                f"**Service:** `{inc_info['service']}`\n\n"
-                f"**Action Plan:** Investigate root cause and apply connection pool scaling/timeout fixes."
-            )
-            issue_labels = ["critical", "incident", "database", inc_info["service"]]
-            target_repo = repo
-            if inc_info and inc_info.get("service") and not (settings.GITHUB_DEFAULT_REPO and settings.GITHUB_DEFAULT_REPO != "auth-service"):
-                target_repo = inc_info.get("service")
-            planned.append({
-                "tool": "create_issue",
-                "system": "github",
-                "args": {
-                    "owner": owner,
-                    "repo": target_repo,
-                    "title": issue_title,
-                    "body": issue_body,
-                    "labels": issue_labels
-                },
-                "is_write": True,
-                "summary": f"Create GitHub issue '{issue_title}' in '{owner}/{target_repo}'"
-            })
 
 
     # -------------------------------------------------------------------------
@@ -927,8 +991,10 @@ async def generate_response_node(state: OpsAgentState) -> Dict[str, Any]:
                 elif tool == "list_pull_requests":
                     prs = res.get("pull_requests", []) if isinstance(res, dict) else []
                     lines.append(f"\n#### 🔀 GitHub Pull Requests ({len(prs)} open in `{res.get('owner')}/{res.get('repo')}`):\n")
+                    if not prs:
+                        lines.append(f"- ✅ **0 open pull requests found** in `{res.get('owner')}/{res.get('repo')}`. There are currently no active pull requests awaiting review.")
                     for p in prs:
-                        lines.append(f"- **#{p.get('number')}** [{p.get('title')}]({p.get('html_url')}) · `state: {p.get('state')}` · *Branch:* `{p.get('head', {}).get('ref')}` ➔ `{p.get('base', {}).get('ref')}`")
+                        lines.append(f"- **#{p.get('number')}** [{p.get('title')}]({p.get('html_url')}) · `state: {p.get('state')}` · *Branch:* `{p.get('head', {}).get('ref')}` -> `{p.get('base', {}).get('ref')}`")
                 elif tool in ("list_commits", "list_recent_commits"):
                     commits = res.get("commits", []) if isinstance(res, dict) else (res if isinstance(res, list) else [])
                     lines.append(f"\n#### 📜 Recent GitHub Commits ({len(commits)} commits):\n")
@@ -995,6 +1061,43 @@ async def generate_response_node(state: OpsAgentState) -> Dict[str, Any]:
                     if conflicts:
                         for c in conflicts:
                             lines.append(f"  *Conflict:* {c.get('title')} ({c.get('start')} - {c.get('end')})")
+                elif tool == "inspect_database_schema":
+                    tables = res.get("tables", []) if isinstance(res, dict) else []
+                    dialect = res.get("dialect", "database").upper()
+                    lines.append(f"\n#### 🗄️ Database Schema & Tables ({dialect} — {len(tables)} tables discovered):\n")
+                    for t in tables:
+                        t_name = t.get("table_name")
+                        cols = t.get("columns", [])
+                        pk_list = [c["name"] for c in cols if c.get("primary_key")]
+                        pk_str = f" · *Primary Key:* `{', '.join(pk_list)}`" if pk_list else ""
+                        col_names = ", ".join([f"`{c['name']}` ({c['type']})" for c in cols[:6]])
+                        more = f" and {len(cols) - 6} more columns" if len(cols) > 6 else ""
+                        lines.append(f"- **Table `{t_name}`** ({len(cols)} columns){pk_str}\n  Columns: {col_names}{more}")
+                elif tool == "execute_read_only_query":
+                    rows = res.get("rows", []) if isinstance(res, dict) else []
+                    duration = res.get("execution_time_ms", 0)
+                    query_str = res.get("query", "")
+                    lines.append(f"\n#### 📑 Safe Database Query Results ({len(rows)} records retrieved in {duration}ms):\n")
+                    lines.append(f"*Executed Query:* `{query_str}`\n")
+                    if rows:
+                        headers = list(rows[0].keys())
+                        lines.append("| " + " | ".join(headers) + " |")
+                        lines.append("| " + " | ".join(["---"] * len(headers)) + " |")
+                        for r in rows[:10]:
+                            row_vals = [str(r.get(h, "")) for h in headers]
+                            lines.append("| " + " | ".join(row_vals) + " |")
+                        if len(rows) > 10:
+                            lines.append(f"\n*(Showing top 10 of {len(rows)} rows)*")
+                    else:
+                        lines.append("*(No rows matched the query criteria)*")
+                elif tool == "check_database_health":
+                    status_val = res.get("status", "unknown").upper()
+                    dialect = res.get("dialect", "database").upper()
+                    lat = res.get("latency_ms", 0)
+                    lines.append(f"\n#### 🩺 Database Health Status:\n")
+                    lines.append(f"- **Status:** `{status_val}` ✅")
+                    lines.append(f"- **Dialect:** `{dialect}`")
+                    lines.append(f"- **Ping Latency:** `{lat}ms`")
                 else:
                     lines.append(f"\n**Tool `{tool}` Output:**\n```json\n{json.dumps(res, indent=2)}\n```")
 

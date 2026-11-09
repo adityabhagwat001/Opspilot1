@@ -28,6 +28,8 @@ interface ApprovalCardProps {
   onReject: (id: string, reason?: string) => Promise<void>;
   onDelete?: (id: string) => Promise<void>;
   compact?: boolean;
+  userRole?: string;
+  currentUserId?: string;
 }
 
 function parseApprovalStory(approval: ApprovalRequest) {
@@ -161,8 +163,11 @@ export const ApprovalCard: React.FC<ApprovalCardProps> = ({
   onApprove,
   onReject,
   onDelete,
-  compact = false
+  compact = false,
+  userRole = 'admin',
+  currentUserId
 }) => {
+  const isRequester = Boolean(currentUserId && approval.requesting_user_id === currentUserId);
   const [isApproving, setIsApproving] = useState(false);
   const [isRejecting, setIsRejecting] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -261,7 +266,7 @@ export const ApprovalCard: React.FC<ApprovalCardProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5">
-          {onDelete && !isPending && (
+          {onDelete && !isPending && userRole === 'admin' && (
             <button
               onClick={handleDelete}
               disabled={isDeleting}
@@ -376,52 +381,87 @@ export const ApprovalCard: React.FC<ApprovalCardProps> = ({
 
           {/* Action Buttons for Pending Requests */}
           {isPending && (
-            <div className="flex items-center justify-end gap-3 pt-1">
-              {!showRejectInput ? (
-                <>
-                  <button
-                    id={`btn-reject-${approval.id}`}
-                    onClick={() => setShowRejectInput(true)}
-                    disabled={isApproving || isRejecting}
-                    className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold text-rose-300 hover:text-rose-200 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 transition-all disabled:opacity-50"
-                  >
-                    <XCircle className="w-3.5 h-3.5" />
-                    Reject Action
-                  </button>
-
-                  <button
-                    id={`btn-approve-${approval.id}`}
-                    onClick={handleApprove}
-                    disabled={isApproving || isRejecting}
-                    className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-bold text-slate-950 bg-emerald-400 hover:bg-emerald-300 shadow-md shadow-emerald-500/20 transition-all disabled:opacity-50"
-                  >
-                    {isApproving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
-                    Approve & Execute
-                  </button>
-                </>
+            <div className="pt-1">
+              {userRole !== 'admin' ? (
+                isRequester ? (
+                  <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-3 rounded-lg bg-sky-500/10 border border-sky-500/20 text-xs text-sky-300 w-full">
+                    <div className="flex items-center gap-2">
+                      <ShieldAlert className="w-4 h-4 text-sky-400 shrink-0" />
+                      <span>You initiated this proposal. Awaiting Enterprise Administrator review. You may cancel it if no longer needed.</span>
+                    </div>
+                    <button
+                      id={`btn-cancel-request-${approval.id}`}
+                      onClick={() => onReject(approval.id, 'Cancelled by requester')}
+                      disabled={isRejecting}
+                      className="px-3.5 py-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 text-xs font-semibold shrink-0 transition-colors"
+                    >
+                      {isRejecting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Cancel My Request'}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 p-3 rounded-lg bg-sky-500/10 border border-sky-500/20 text-xs text-sky-300 w-full">
+                    <ShieldAlert className="w-4 h-4 text-sky-400 shrink-0" />
+                    <div>
+                      <span className="font-semibold">Operator View:</span> Awaiting authorization from an Enterprise Administrator. Only Enterprise Administrators can authorize external write operations.
+                    </div>
+                  </div>
+                )
               ) : (
-                <div className="flex items-center gap-2 w-full">
-                  <input
-                    type="text"
-                    placeholder="Enter reason for rejection (optional)..."
-                    value={rejectReason}
-                    onChange={(e) => setRejectReason(e.target.value)}
-                    className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-rose-500"
-                  />
-                  <button
-                    onClick={() => setShowRejectInput(false)}
-                    className="text-xs text-slate-400 hover:text-slate-200 px-2"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={handleReject}
-                    disabled={isRejecting}
-                    className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold bg-rose-600 text-white hover:bg-rose-500"
-                  >
-                    {isRejecting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Confirm Rejection'}
-                  </button>
-                </div>
+                <>
+                  {isRequester && (
+                    <div className="mb-2 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300 flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                      <span><strong>Separation of Duties Notice:</strong> You requested this action. When Separation of Duties is enforced, a different administrator must approve it.</span>
+                    </div>
+                  )}
+
+                  {!showRejectInput ? (
+                    <div className="flex items-center justify-end gap-3">
+                      <button
+                        id={`btn-reject-${approval.id}`}
+                        onClick={() => setShowRejectInput(true)}
+                        disabled={isApproving || isRejecting}
+                        className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold text-rose-300 hover:text-rose-200 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 transition-all disabled:opacity-50"
+                      >
+                        <XCircle className="w-3.5 h-3.5" />
+                        Reject Action
+                      </button>
+
+                      <button
+                        id={`btn-approve-${approval.id}`}
+                        onClick={handleApprove}
+                        disabled={isApproving || isRejecting}
+                        className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-bold text-slate-950 bg-emerald-400 hover:bg-emerald-300 shadow-md shadow-emerald-500/20 transition-all disabled:opacity-50"
+                      >
+                        {isApproving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                        Approve & Execute
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 w-full">
+                      <input
+                        type="text"
+                        placeholder="Enter reason for rejection (optional)..."
+                        value={rejectReason}
+                        onChange={(e) => setRejectReason(e.target.value)}
+                        className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-rose-500"
+                      />
+                      <button
+                        onClick={() => setShowRejectInput(false)}
+                        className="text-xs text-slate-400 hover:text-slate-200 px-2"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleReject}
+                        disabled={isRejecting}
+                        className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold bg-rose-600 text-white hover:bg-rose-500"
+                      >
+                        {isRejecting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Confirm Rejection'}
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )}

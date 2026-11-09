@@ -2,9 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { ShieldCheck, RefreshCw, Trash2, CheckCircle2, AlertCircle, X } from 'lucide-react';
 import { api } from '../services/api';
 import { ApprovalCard } from '../components/ApprovalCard';
-import { ApprovalRequest } from '../types';
+import { ApprovalRequest, User } from '../types';
 
-export const ApprovalsPage: React.FC = () => {
+interface ApprovalsPageProps {
+  currentUser?: User | null;
+}
+
+export const ApprovalsPage: React.FC<ApprovalsPageProps> = ({ currentUser }) => {
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'pending' | 'all'>('pending');
@@ -165,7 +169,7 @@ export const ApprovalsPage: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2 self-start sm:self-auto">
-          {inactiveCount > 0 && (
+          {inactiveCount > 0 && currentUser?.role === 'admin' && (
             <button
               onClick={handlePurge}
               disabled={purging}
@@ -257,6 +261,8 @@ export const ApprovalsPage: React.FC = () => {
               onApprove={handleApprove}
               onReject={handleReject}
               onDelete={handleDelete}
+              userRole={currentUser?.role || 'admin'}
+              currentUserId={currentUser?.id}
             />
           ))}
         </div>

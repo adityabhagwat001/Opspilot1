@@ -90,7 +90,8 @@ class ApprovalService:
         self,
         db: AsyncSession,
         approval_id: str,
-        approver_user_id: str
+        approver_user_id: str,
+        enforce_separation_of_duties: bool = False
     ) -> Dict[str, Any]:
         """
         Atomically claims and approves a pending request:
@@ -132,6 +133,31 @@ class ApprovalService:
         # Fetch claimed approval
         stmt = select(ApprovalRequest).where(ApprovalRequest.id == approval_id)
         approval = (await db.execute(stmt)).scalar_one()
+
+        # Verify approver authorization & role
+        from app.models.models import User
+        approver_res = await db.execute(select(User).where(User.id == approver_user_id))
+        approver_obj = approver_res.scalar_one_or_none()
+        if approver_obj and approver_obj.role != "admin":
+            approval.approval_status = "pending"
+            approval.approved_by = None
+            approval.approved_at = None
+            await db.commit()
+            return {
+                "status": "SECURITY_ERROR",
+                "error": f"Role '{approver_obj.role}' is not authorized to approve write actions. Administrator role required."
+            }
+
+        # Enforce Separation of Duties when required: Requester cannot approve their own proposal
+        if enforce_separation_of_duties and approval.requesting_user_id == approver_user_id:
+            approval.approval_status = "pending"
+            approval.approved_by = None
+            approval.approved_at = None
+            await db.commit()
+            return {
+                "status": "SECURITY_ERROR",
+                "error": "Separation of duties violation: Requester cannot approve their own fix request."
+            }
 
         # Check expiration (15 minutes) - standardize naive datetime from SQLite to UTC
         exp = approval.expires_at

@@ -36,8 +36,15 @@ mcp = FastMCP("opspilot-github-server")
 GITHUB_API_BASE = "https://api.github.com"
 APPROVAL_SECRET = os.getenv("OPSPILOT_APPROVAL_SECRET", "opspilot_trusted_approval_boundary_secret_key_32chars")
 
-def is_mock_allowed() -> bool:
-    return not os.getenv("GITHUB_TOKEN") or os.getenv("DEMO_MODE", "false").lower() in ("true", "1", "yes") or os.getenv("MOCK_MODE", "false").lower() in ("true", "1", "yes")
+def is_mock_allowed(owner: str = "") -> bool:
+    """
+    Mock sandbox is ONLY allowed in synthetic test suites targeting 'enterprise-ops' or 'enterprise-org'
+    or when explicit DEMO_MODE=true or MOCK_MODE=true is configured.
+    Real user repositories (e.g. adityabhagwat001 or any real account) MUST NEVER return fabricated data.
+    """
+    if owner in ("enterprise-ops", "enterprise-org", "enterprise-corp"):
+        return True
+    return os.getenv("DEMO_MODE", "false").lower() in ("true", "1", "yes") or os.getenv("MOCK_MODE", "false").lower() in ("true", "1", "yes")
 
 def get_github_client(token: Optional[str] = None) -> httpx.AsyncClient:
     api_token = token or os.getenv("GITHUB_TOKEN", "")
@@ -251,9 +258,15 @@ async def fetch_user_public_repos_realtime(username: str, token: Optional[str] =
     return repos
 
 @mcp.tool()
-async def list_repositories(visibility: str = "all", per_page: int = 10) -> Dict[str, Any]:
+async def list_repositories(
+    visibility: str = "all",
+    per_page: int = 30,
+    page: int = 1,
+    affiliation: str = "owner,collaborator,organization_member"
+) -> Dict[str, Any]:
     """
     List repositories accessible by the configured GitHub token or user account.
+    Supports pagination (page, per_page) and affiliation (owner, collaborator, organization_member).
     """
     token = os.getenv("GITHUB_TOKEN", "")
     owner = os.getenv("GITHUB_DEFAULT_OWNER", "")
@@ -284,7 +297,13 @@ async def list_repositories(visibility: str = "all", per_page: int = 10) -> Dict
     
     try:
         async with get_github_client(token) as client:
-            resp = await client.get("/user/repos", params={"visibility": visibility, "per_page": per_page, "sort": "updated"})
+            resp = await client.get("/user/repos", params={
+                "visibility": visibility,
+                "per_page": per_page,
+                "page": page,
+                "affiliation": affiliation,
+                "sort": "updated"
+            })
             if resp.status_code != 200:
                 return create_error_envelope(
                     system="github",
@@ -293,8 +312,12 @@ async def list_repositories(visibility: str = "all", per_page: int = 10) -> Dict
                     error_category="PROVIDER_ERROR"
                 )
             repos = resp.json()
-            cleaned = [
-                {
+            cleaned = []
+            for r in repos:
+                perms = r.get("permissions", {})
+                can_push = perms.get("push", False)
+                can_pull = perms.get("pull", True)
+                cleaned.append({
                     "id": r.get("id"),
                     "name": r.get("name"),
                     "full_name": r.get("full_name"),
@@ -303,14 +326,21 @@ async def list_repositories(visibility: str = "all", per_page: int = 10) -> Dict
                     "html_url": r.get("html_url"),
                     "open_issues_count": r.get("open_issues_count"),
                     "default_branch": r.get("default_branch"),
-                    "updated_at": r.get("updated_at")
-                }
-                for r in repos
-            ]
+                    "updated_at": r.get("updated_at"),
+                    "permissions": perms,
+                    "can_push": can_push,
+                    "can_pull": can_pull,
+                    "permission_level": "read_write" if can_push else ("read_only" if can_pull else "none")
+                })
             return create_success_envelope(
                 system="github",
                 tool="list_repositories",
-                data={"total_returned": len(cleaned), "repositories": cleaned},
+                data={
+                    "total_returned": len(cleaned),
+                    "page": page,
+                    "per_page": per_page,
+                    "repositories": cleaned
+                },
                 resource_ids_urls=[r["html_url"] for r in cleaned if r.get("html_url")]
             )
     except Exception as ex:
@@ -324,24 +354,17 @@ async def list_repositories(visibility: str = "all", per_page: int = 10) -> Dict
 @mcp.tool()
 async def get_repository_details(owner: str, repo: str) -> Dict[str, Any]:
     """
-    Get metadata, stars, forks, and health of a specific GitHub repository.
+    Get metadata, stars, forks, permissions, and health of a specific GitHub repository.
     """
     token = os.getenv("GITHUB_TOKEN", "")
-    if not token:
-        if is_mock_allowed():
-            match = next((r for r in MOCK_REPOS if r["name"] == repo), MOCK_REPOS[0])
-            return create_success_envelope(
-                system="github",
-                tool="get_repository_details",
-                data=match,
-                source_mode="mock_sandbox",
-                resource_ids_urls=[match["html_url"]]
-            )
-        return create_error_envelope(
+    if is_mock_allowed(owner):
+        match = next((r for r in MOCK_REPOS if r["name"] == repo), MOCK_REPOS[0])
+        return create_success_envelope(
             system="github",
             tool="get_repository_details",
-            error="GITHUB_AUTH_REQUIRED: GITHUB_TOKEN is not configured in environment.",
-            error_category="UNAUTHENTICATED"
+            data=match,
+            source_mode="mock_sandbox",
+            resource_ids_urls=[match["html_url"]]
         )
 
     try:
@@ -362,6 +385,9 @@ async def get_repository_details(owner: str, repo: str) -> Dict[str, Any]:
                     error_category="PROVIDER_ERROR"
                 )
             data = resp.json()
+            perms = data.get("permissions", {})
+            can_push = perms.get("push", False)
+            can_pull = perms.get("pull", True)
             cleaned = {
                 "full_name": data.get("full_name"),
                 "description": data.get("description"),
@@ -370,7 +396,12 @@ async def get_repository_details(owner: str, repo: str) -> Dict[str, Any]:
                 "forks": data.get("forks_count"),
                 "open_issues": data.get("open_issues_count"),
                 "default_branch": data.get("default_branch"),
-                "language": data.get("language")
+                "language": data.get("language"),
+                "permissions": perms,
+                "can_push": can_push,
+                "can_pull": can_pull,
+                "permission_level": "read_write" if can_push else ("read_only" if can_pull else "none"),
+                "permission_label": "Read/Write" if can_push else ("Read-Only" if can_pull else "No Access")
             }
             return create_success_envelope(
                 system="github",
@@ -399,25 +430,18 @@ async def list_issues(
     Explicitly distinguishes pull requests from actual issues.
     """
     token = os.getenv("GITHUB_TOKEN", "")
-    if not token:
-        if is_mock_allowed():
-            return create_success_envelope(
-                system="github",
-                tool="list_issues",
-                data={
-                    "owner": owner,
-                    "repo": repo,
-                    "count": len(MOCK_ISSUES),
-                    "issues": MOCK_ISSUES
-                },
-                source_mode="mock_sandbox",
-                resource_ids_urls=[i["html_url"] for i in MOCK_ISSUES]
-            )
-        return create_error_envelope(
+    if is_mock_allowed(owner):
+        return create_success_envelope(
             system="github",
             tool="list_issues",
-            error="GITHUB_AUTH_REQUIRED: GITHUB_TOKEN is not configured in environment.",
-            error_category="UNAUTHENTICATED"
+            data={
+                "owner": owner,
+                "repo": repo,
+                "count": len(MOCK_ISSUES),
+                "issues": MOCK_ISSUES
+            },
+            source_mode="mock_sandbox",
+            resource_ids_urls=[i["html_url"] for i in MOCK_ISSUES]
         )
 
     params = {"state": state, "per_page": per_page, "sort": "updated", "direction": "desc"}
@@ -427,6 +451,13 @@ async def list_issues(
     try:
         async with get_github_client(token) as client:
             resp = await client.get(f"/repos/{owner}/{repo}/issues", params=params)
+            if resp.status_code == 404:
+                return create_error_envelope(
+                    system="github",
+                    tool="list_issues",
+                    error=f"Repository '{owner}/{repo}' not found or is private.",
+                    error_category="NOT_FOUND"
+                )
             if resp.status_code != 200:
                 return create_error_envelope(
                     system="github",
@@ -473,21 +504,14 @@ async def get_issue_details(owner: str, repo: str, issue_number: int) -> Dict[st
     Get complete details and comments for a specific issue.
     """
     token = os.getenv("GITHUB_TOKEN", "")
-    if not token:
-        if is_mock_allowed():
-            match = next((i for i in MOCK_ISSUES if i["number"] == issue_number), MOCK_ISSUES[0])
-            return create_success_envelope(
-                system="github",
-                tool="get_issue_details",
-                data=match,
-                source_mode="mock_sandbox",
-                resource_ids_urls=[match["html_url"]]
-            )
-        return create_error_envelope(
+    if is_mock_allowed(owner):
+        match = next((i for i in MOCK_ISSUES if i["number"] == issue_number), MOCK_ISSUES[0])
+        return create_success_envelope(
             system="github",
             tool="get_issue_details",
-            error="GITHUB_AUTH_REQUIRED: GITHUB_TOKEN is not configured in environment.",
-            error_category="UNAUTHENTICATED"
+            data=match,
+            source_mode="mock_sandbox",
+            resource_ids_urls=[match["html_url"]]
         )
 
     try:
@@ -537,36 +561,36 @@ async def list_pull_requests(
     List pull requests from a GitHub repository.
     """
     token = os.getenv("GITHUB_TOKEN", "")
-    if not token:
-        if is_mock_allowed():
-            prs = [
-                {
-                    "number": 43,
-                    "title": "fix: increase max pool size for Postgres connection pool to 80",
-                    "state": "open",
-                    "user": "lead-dev",
-                    "draft": False,
-                    "html_url": f"https://github.com/{owner}/{repo}/pull/43",
-                    "created_at": "2026-10-13T11:00:00Z"
-                }
-            ]
-            return create_success_envelope(
-                system="github",
-                tool="list_pull_requests",
-                data={"owner": owner, "repo": repo, "count": len(prs), "pull_requests": prs},
-                source_mode="mock_sandbox",
-                resource_ids_urls=[p["html_url"] for p in prs]
-            )
-        return create_error_envelope(
+    if is_mock_allowed(owner):
+        prs = [
+            {
+                "number": 43,
+                "title": "fix: increase max pool size for Postgres connection pool to 80",
+                "state": "open",
+                "user": "lead-dev",
+                "draft": False,
+                "html_url": f"https://github.com/{owner}/{repo}/pull/43",
+                "created_at": "2026-10-13T11:00:00Z"
+            }
+        ]
+        return create_success_envelope(
             system="github",
             tool="list_pull_requests",
-            error="GITHUB_AUTH_REQUIRED: GITHUB_TOKEN is not configured in environment.",
-            error_category="UNAUTHENTICATED"
+            data={"owner": owner, "repo": repo, "count": len(prs), "pull_requests": prs},
+            source_mode="mock_sandbox",
+            resource_ids_urls=[p["html_url"] for p in prs]
         )
 
     try:
         async with get_github_client(token) as client:
             resp = await client.get(f"/repos/{owner}/{repo}/pulls", params={"state": state, "per_page": per_page})
+            if resp.status_code == 404:
+                return create_error_envelope(
+                    system="github",
+                    tool="list_pull_requests",
+                    error=f"Repository '{owner}/{repo}' not found or is private.",
+                    error_category="NOT_FOUND"
+                )
             if resp.status_code != 200:
                 return create_error_envelope(
                     system="github",
@@ -607,7 +631,7 @@ async def get_pull_request_details(owner: str, repo: str, pull_number: int) -> D
     Get detailed information about a pull request including merge status, branch names, and diff stats.
     """
     token = os.getenv("GITHUB_TOKEN", "")
-    if not token and is_mock_allowed():
+    if is_mock_allowed(owner):
         return create_success_envelope(
             system="github",
             tool="get_pull_request_details",
@@ -671,7 +695,7 @@ async def list_recent_commits(owner: str, repo: str, per_page: int = 10) -> Dict
     List recent commits on the default branch.
     """
     token = os.getenv("GITHUB_TOKEN", "")
-    if not token and is_mock_allowed():
+    if is_mock_allowed(owner):
         commits = [
             {
                 "sha": "a7b3c9d",
@@ -729,7 +753,7 @@ async def get_workflow_runs(owner: str, repo: str, per_page: int = 5) -> Dict[st
     Retrieve recent GitHub Actions CI/CD workflow runs and their status.
     """
     token = os.getenv("GITHUB_TOKEN", "")
-    if not token and is_mock_allowed():
+    if is_mock_allowed(owner):
         runs = [
             {
                 "id": 89201,
@@ -925,20 +949,28 @@ async def update_issue(
         )
 
     token = os.getenv("GITHUB_TOKEN", "")
-    if not token and is_mock_allowed():
-        url = f"https://github.com/{owner}/{repo}/issues/{issue_number}"
-        return create_success_envelope(
+    if not token:
+        if is_mock_allowed(owner):
+            url = f"https://github.com/{owner}/{repo}/issues/{issue_number}"
+            return create_success_envelope(
+                system="github",
+                tool="update_issue",
+                is_write=True,
+                data={
+                    "status": "SUCCESS",
+                    "issue_number": issue_number,
+                    "state": state or "open",
+                    "html_url": url
+                },
+                resource_ids_urls=[url],
+                source_mode="mock_sandbox"
+            )
+        return create_error_envelope(
             system="github",
             tool="update_issue",
-            is_write=True,
-            data={
-                "status": "SUCCESS",
-                "issue_number": issue_number,
-                "state": state or "open",
-                "html_url": url
-            },
-            resource_ids_urls=[url],
-            source_mode="mock_sandbox"
+            error=f"GITHUB_TOKEN_REQUIRED: Updating an issue in '{owner}/{repo}' requires an authenticated GitHub token with 'repo' scope.",
+            error_category="UNAUTHENTICATED",
+            is_write=True
         )
 
     payload = {}
@@ -1011,19 +1043,27 @@ async def add_issue_comment(
         )
 
     token = os.getenv("GITHUB_TOKEN", "")
-    if not token and is_mock_allowed():
-        url = f"https://github.com/{owner}/{repo}/issues/{issue_number}#issuecomment-999"
-        return create_success_envelope(
+    if not token:
+        if is_mock_allowed(owner):
+            url = f"https://github.com/{owner}/{repo}/issues/{issue_number}#issuecomment-999"
+            return create_success_envelope(
+                system="github",
+                tool="add_issue_comment",
+                is_write=True,
+                data={
+                    "status": "SUCCESS",
+                    "comment_id": 999,
+                    "html_url": url
+                },
+                resource_ids_urls=[url],
+                source_mode="mock_sandbox"
+            )
+        return create_error_envelope(
             system="github",
             tool="add_issue_comment",
-            is_write=True,
-            data={
-                "status": "SUCCESS",
-                "comment_id": 999,
-                "html_url": url
-            },
-            resource_ids_urls=[url],
-            source_mode="mock_sandbox"
+            error=f"GITHUB_TOKEN_REQUIRED: Posting a comment on an issue in '{owner}/{repo}' requires an authenticated GitHub token with 'repo' scope.",
+            error_category="UNAUTHENTICATED",
+            is_write=True
         )
 
     try:
@@ -1152,7 +1192,7 @@ async def get_repository_file(owner: str, repo: str, path: str, ref: Optional[st
     Retrieve file content and metadata (SHA, size) from a repository branch or commit.
     """
     token = os.getenv("GITHUB_TOKEN", "")
-    if not token or owner == "enterprise-ops" or is_mock_allowed():
+    if is_mock_allowed(owner):
         return create_success_envelope(
             system="github",
             tool="get_repository_file",
@@ -1218,7 +1258,7 @@ async def list_workflow_run_jobs(owner: str, repo: str, run_id: int) -> Dict[str
     Identifies failing steps, status, and duration.
     """
     token = os.getenv("GITHUB_TOKEN", "")
-    if not token or owner == "enterprise-ops" or is_mock_allowed():
+    if is_mock_allowed(owner):
         return create_success_envelope(
             system="github",
             tool="list_workflow_run_jobs",
@@ -1292,7 +1332,7 @@ async def get_workflow_logs(owner: str, repo: str, run_id: int, job_id: Optional
     Download and extract error snippets and failing stacktraces from workflow run or job logs.
     """
     token = os.getenv("GITHUB_TOKEN", "")
-    if not token or owner == "enterprise-ops" or is_mock_allowed():
+    if is_mock_allowed(owner):
         snippet = (
             "============================= FAILURES =============================\n"
             "________________________ test_auth_token_expiry ________________________\n"
@@ -1385,7 +1425,7 @@ async def get_pull_request_diff(owner: str, repo: str, pull_number: int) -> Dict
     Retrieve unified git diff representation of a pull request for AI code review and bug inspection.
     """
     token = os.getenv("GITHUB_TOKEN", "")
-    if not token or owner == "enterprise-ops" or is_mock_allowed():
+    if is_mock_allowed(owner):
         mock_diff = (
             "diff --git a/app/auth.py b/app/auth.py\n"
             "--- a/app/auth.py\n"
@@ -1461,15 +1501,23 @@ async def create_branch(
         )
 
     token = os.getenv("GITHUB_TOKEN", "")
-    if not token and is_mock_allowed():
-        url = f"https://github.com/{owner}/{repo}/tree/{branch_name}"
-        return create_success_envelope(
+    if not token:
+        if is_mock_allowed(owner):
+            url = f"https://github.com/{owner}/{repo}/tree/{branch_name}"
+            return create_success_envelope(
+                system="github",
+                tool="create_branch",
+                is_write=True,
+                data={"status": "SUCCESS", "ref": f"refs/heads/{branch_name}", "branch": branch_name, "html_url": url},
+                source_mode="mock_sandbox",
+                resource_ids_urls=[url]
+            )
+        return create_error_envelope(
             system="github",
             tool="create_branch",
-            is_write=True,
-            data={"status": "SUCCESS", "ref": f"refs/heads/{branch_name}", "branch": branch_name, "html_url": url},
-            source_mode="mock_sandbox",
-            resource_ids_urls=[url]
+            error=f"GITHUB_TOKEN_REQUIRED: Creating a branch in '{owner}/{repo}' requires an authenticated GitHub token with 'repo' scope.",
+            error_category="UNAUTHENTICATED",
+            is_write=True
         )
 
     try:
@@ -1553,15 +1601,23 @@ async def commit_file_changes(
         )
 
     token = os.getenv("GITHUB_TOKEN", "")
-    if not token and is_mock_allowed():
-        url = f"https://github.com/{owner}/{repo}/blob/{branch}/{path}"
-        return create_success_envelope(
+    if not token:
+        if is_mock_allowed(owner):
+            url = f"https://github.com/{owner}/{repo}/blob/{branch}/{path}"
+            return create_success_envelope(
+                system="github",
+                tool="commit_file_changes",
+                is_write=True,
+                data={"status": "SUCCESS", "path": path, "branch": branch, "commit_sha": "mock_commit_sha_123", "html_url": url},
+                source_mode="mock_sandbox",
+                resource_ids_urls=[url]
+            )
+        return create_error_envelope(
             system="github",
             tool="commit_file_changes",
-            is_write=True,
-            data={"status": "SUCCESS", "path": path, "branch": branch, "commit_sha": "mock_commit_sha_123", "html_url": url},
-            source_mode="mock_sandbox",
-            resource_ids_urls=[url]
+            error=f"GITHUB_TOKEN_REQUIRED: Committing changes to '{owner}/{repo}' requires an authenticated GitHub token with 'repo' scope.",
+            error_category="UNAUTHENTICATED",
+            is_write=True
         )
 
     try:
@@ -1650,7 +1706,8 @@ async def create_pull_request(
         )
 
     token = os.getenv("GITHUB_TOKEN", "")
-    if not token and is_mock_allowed():
+    is_mock = is_mock_allowed(owner) and (not token or os.getenv("MOCK_MODE", "false").lower() in ("true", "1") or os.getenv("DEMO_MODE", "false").lower() in ("true", "1"))
+    if is_mock:
         url = f"https://github.com/{owner}/{repo}/pulls"
         return create_success_envelope(
             system="github",
@@ -1667,6 +1724,15 @@ async def create_pull_request(
             },
             source_mode="mock_sandbox",
             resource_ids_urls=[url]
+        )
+
+    if not token:
+        return create_error_envelope(
+            system="github",
+            tool="create_pull_request",
+            error=f"GITHUB_TOKEN_REQUIRED: Opening a pull request in '{owner}/{repo}' requires an authenticated GitHub token with 'repo' scope. Please configure your GitHub token in Connected Services or .env.",
+            error_category="UNAUTHENTICATED",
+            is_write=True
         )
 
     try:
@@ -1689,6 +1755,14 @@ async def create_pull_request(
                         f"/repos/{owner}/{repo}/git/refs",
                         json={"ref": f"refs/heads/{head}", "sha": base_sha}
                     )
+                    if branch_resp.status_code == 403:
+                        return create_error_envelope(
+                            system="github",
+                            tool="create_pull_request",
+                            error=f"PERMISSION_DENIED: GitHub token does not have write/push access to '{owner}/{repo}'. Write permissions are required to create branch '{head}'.",
+                            error_category="PERMISSION_DENIED",
+                            is_write=True
+                        )
                     if branch_resp.status_code not in (200, 201):
                         return create_error_envelope(
                             system="github",
@@ -1727,6 +1801,30 @@ async def create_pull_request(
                 json={"title": title, "body": body, "head": head, "base": base}
             )
             if resp.status_code not in (200, 201):
+                if resp.status_code == 422 and "already exists" in resp.text.lower():
+                    # Pull request already exists on GitHub for this head branch; retrieve it
+                    existing_prs = await client.get(
+                        f"/repos/{owner}/{repo}/pulls",
+                        params={"head": f"{owner}:{head}", "state": "all"}
+                    )
+                    if existing_prs.status_code == 200 and existing_prs.json():
+                        existing_data = existing_prs.json()[0]
+                        existing_url = existing_data.get("html_url", "")
+                        return create_success_envelope(
+                            system="github",
+                            tool="create_pull_request",
+                            is_write=True,
+                            data={
+                                "status": "SUCCESS",
+                                "number": existing_data.get("number"),
+                                "title": existing_data.get("title"),
+                                "html_url": existing_url,
+                                "state": existing_data.get("state"),
+                                "head": head,
+                                "base": base
+                            },
+                            resource_ids_urls=[existing_url] if existing_url else []
+                        )
                 return create_error_envelope(
                     system="github",
                     tool="create_pull_request",

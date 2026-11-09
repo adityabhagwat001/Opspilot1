@@ -13,6 +13,11 @@ from app.models.models import Base, User, Workspace, WorkspaceMember, Integratio
 engine = create_async_engine(settings.DATABASE_URL, echo=False)
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
+def configure_db_engine(db_url: str):
+    global engine, AsyncSessionLocal
+    engine = create_async_engine(db_url, echo=False)
+    AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+
 async def get_db():
     async with AsyncSessionLocal() as session:
         try:
@@ -35,12 +40,50 @@ async def init_system_db():
                 ("workflow_failures", "workflow_id", "VARCHAR(50)"),
                 ("workflow_failures", "html_url", "VARCHAR(255)"),
                 ("fix_proposals", "pr_number", "INTEGER"),
-                ("in_app_notifications", "user_id", "VARCHAR(50)")
+                ("fix_proposals", "pr_state", "VARCHAR(30) DEFAULT 'NOT_CREATED'"),
+                ("fix_proposals", "test_results_json", "TEXT"),
+                ("fix_proposals", "resolution_status", "VARCHAR(30) DEFAULT 'NOT_VERIFIED'"),
+                ("fix_proposals", "merge_commit_sha", "VARCHAR(64)"),
+                ("fix_proposals", "merged_at", "DATETIME"),
+                ("fix_proposals", "verified_at", "DATETIME"),
+                ("fix_proposals", "verification_details_json", "TEXT"),
+                ("workflow_failures", "analysis_status", "VARCHAR(30) DEFAULT 'NOT_ANALYZED'"),
+                ("workflow_failures", "structured_analysis_json", "TEXT"),
+                ("workflow_failures", "resolution_status", "VARCHAR(30) DEFAULT 'NOT_VERIFIED'"),
+                ("workflow_failures", "resolution_evidence_json", "TEXT"),
+                ("workflow_failures", "resolution_verified_at", "DATETIME"),
+                ("audit_logs", "proposal_id", "VARCHAR(50)"),
+                ("audit_logs", "failure_id", "VARCHAR(50)"),
+                ("audit_logs", "repo_full_name", "VARCHAR(200)"),
+                ("audit_logs", "solution_history_json", "TEXT"),
+                ("in_app_notifications", "user_id", "VARCHAR(50)"),
+                ("users", "is_verified", "BOOLEAN DEFAULT 0"),
+                ("users", "verification_token", "VARCHAR(100)"),
+                ("users", "verification_token_expires_at", "DATETIME"),
+                ("users", "reset_password_token", "VARCHAR(100)"),
+                ("users", "reset_password_token_expires_at", "DATETIME"),
+                ("users", "account_type", "VARCHAR(20) DEFAULT 'individual'"),
+                ("users", "account_status", "VARCHAR(30) DEFAULT 'active'"),
+                ("users", "company_name", "VARCHAR(100)"),
+                ("users", "last_login_at", "DATETIME"),
+                ("users", "updated_at", "DATETIME"),
+                ("workspaces", "company_email", "VARCHAR(150)"),
+                ("workspaces", "website", "VARCHAR(255)"),
+                ("workspaces", "industry", "VARCHAR(100)"),
+                ("workspaces", "status", "VARCHAR(30) DEFAULT 'active'"),
+                ("workspaces", "updated_at", "DATETIME"),
+                ("workspace_invitations", "token_hash", "VARCHAR(64)")
             ]:
                 try:
                     sync_conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN {col} {typ}"))
                 except Exception:
                     pass
+            try:
+                sync_conn.execute(text("UPDATE users SET is_verified = 1 WHERE is_verified IS NULL OR email IN ('admin@opspilot.internal', 'operator@opspilot.internal')"))
+                sync_conn.execute(text("UPDATE users SET account_status = 'active' WHERE account_status IS NULL"))
+                sync_conn.execute(text("UPDATE workspaces SET status = 'active' WHERE status IS NULL"))
+            except Exception:
+                pass
         await conn.run_sync(_migrate)
 
     async with AsyncSessionLocal() as session:
@@ -65,9 +108,13 @@ async def init_system_db():
                 full_name="Enterprise Admin",
                 hashed_password=hash_password("admin123"),
                 role="admin",
-                is_active=True
+                is_active=True,
+                is_verified=True,
+                account_type="individual"
             )
             session.add(admin)
+        else:
+            admin.is_verified = True
 
         # Check default operator user
         operator_stmt = select(User).where(User.email == "operator@opspilot.internal")
@@ -79,9 +126,13 @@ async def init_system_db():
                 full_name="Lead DevOps Operator",
                 hashed_password=hash_password("operator123"),
                 role="operator",
-                is_active=True
+                is_active=True,
+                is_verified=True,
+                account_type="individual"
             )
             session.add(operator)
+        else:
+            operator.is_verified = True
 
         # Ensure workspace memberships exist
         for u_id, u_role in [("usr-admin-01", "admin"), ("usr-operator-01", "operator")]:
@@ -108,7 +159,7 @@ async def init_system_db():
                 IntegrationConnection.workspace_id == "default-ops",
                 IntegrationConnection.provider == provider
             )
-            existing = (await session.execute(conn_stmt)).scalar_one_or_none()
+            existing = (await session.execute(conn_stmt)).scalars().first()
             if not existing:
                 conn_rec = IntegrationConnection(
                     workspace_id="default-ops",

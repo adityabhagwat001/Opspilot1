@@ -8,7 +8,8 @@ import {
   ScrollText, 
   LogOut, 
   Terminal,
-  GitBranch
+  GitBranch,
+  Building2
 } from 'lucide-react';
 import { User } from '../types';
 
@@ -137,6 +138,23 @@ export const Navbar: React.FC<NavbarProps> = ({ user, pendingApprovalsCount, onL
               <ScrollText className="w-4 h-4" />
               <span>Audit Log</span>
             </NavLink>
+
+            {user?.role === 'admin' && (
+              <NavLink
+                to="/company"
+                id="nav-company"
+                className={({ isActive }) =>
+                  `flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-medium transition-all ${
+                    isActive
+                      ? 'bg-slate-800/80 text-amber-400 shadow-sm border border-slate-700/60'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
+                  }`
+                }
+              >
+                <Building2 className="w-4 h-4" />
+                <span>Company</span>
+              </NavLink>
+            )}
           </nav>
 
           {/* User profile & controls */}
@@ -150,7 +168,13 @@ export const Navbar: React.FC<NavbarProps> = ({ user, pendingApprovalsCount, onL
               <div className="flex items-center gap-2">
                 <div className="text-right hidden sm:block">
                   <p className="text-xs font-semibold text-slate-200">{user.full_name}</p>
-                  <p className="text-[10px] uppercase tracking-wider text-slate-400 font-mono">{user.role}</p>
+                  <span className={`inline-block text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded font-mono ${
+                    user.role === 'admin' 
+                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' 
+                      : 'bg-sky-500/20 text-sky-300 border border-sky-500/30'
+                  }`}>
+                    {user.role === 'admin' ? 'Enterprise Admin' : 'Lead DevOps Operator'}
+                  </span>
                 </div>
                 <button
                   id="btn-logout"

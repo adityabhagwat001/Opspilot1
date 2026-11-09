@@ -51,6 +51,9 @@ SERVER_MAPPING = {
     "get_incident_details": pg_mcp,
     "list_operational_tasks": pg_mcp,
     "get_task_details": pg_mcp,
+    "inspect_database_schema": pg_mcp,
+    "execute_read_only_query": pg_mcp,
+    "check_database_health": pg_mcp,
     "create_operational_task": pg_mcp,
     "update_operational_task": pg_mcp,
     "update_incident_status": pg_mcp,
@@ -153,6 +156,29 @@ class MCPToolRouter:
         server = SERVER_MAPPING.get(actual_tool)
         if not server:
             return {"error": f"Tool '{tool_name}' not recognized by any MCP server."}
+
+        # Resolve active GitHub credential per workspace integration
+        if server == gh_mcp:
+            ws_id = actual_args.get("workspace_id", "default-ops")
+            try:
+                from app.core.db import AsyncSessionLocal
+                from app.models.models import IntegrationConnection
+                from sqlalchemy import select
+                async with AsyncSessionLocal() as session:
+                    conns = (await session.execute(
+                        select(IntegrationConnection).where(
+                            IntegrationConnection.workspace_id == ws_id,
+                            IntegrationConnection.provider == "github"
+                        )
+                    )).scalars().all()
+                    for c in conns:
+                        if c.status == "connected" and c.is_active:
+                            tok = c.details.get("token")
+                            if tok:
+                                os.environ["GITHUB_TOKEN"] = tok
+                            break
+            except Exception:
+                pass
 
         try:
             # Call tool on FastMCP instance

@@ -581,5 +581,200 @@ async def update_incident_status(
         resource_ids_urls=[incident_id]
     )
 
+# =========================================================================
+# ADDITIONAL READ & DIAGNOSTIC TOOLS (AlgoProfessor Requirements)
+# =========================================================================
+
+@mcp.tool()
+async def check_database_health(workspace_id: str = "default-ops") -> Dict[str, Any]:
+    """
+    Check the connectivity, responsiveness, and dialect of the operations database.
+    Performs a lightweight query ping and returns latency, dialect, and health status.
+    """
+    import time
+    start = time.perf_counter()
+    try:
+        from sqlalchemy import text
+        async with ops_db.session_factory() as session:
+            await session.execute(text("SELECT 1"))
+        latency_ms = round((time.perf_counter() - start) * 1000, 2)
+        dialect = "postgresql" if "postgresql" in ops_db.db_url else "sqlite"
+        return create_success_envelope(
+            system="postgresql",
+            tool="check_database_health",
+            data={
+                "status": "connected",
+                "healthy": True,
+                "dialect": dialect,
+                "latency_ms": latency_ms,
+                "database_url_configured": bool(ops_db.db_url),
+                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat() + "Z"
+            }
+        )
+    except Exception as ex:
+        latency_ms = round((time.perf_counter() - start) * 1000, 2)
+        return create_error_envelope(
+            system="postgresql",
+            tool="check_database_health",
+            error=f"Database health check failed: {str(ex)}",
+            error_category="CONNECTION_ERROR",
+            retryable=True
+        )
+
+@mcp.tool()
+async def inspect_database_schema(workspace_id: str = "default-ops") -> Dict[str, Any]:
+    """
+    Inspect the schema of the operations database.
+    Returns authorized tables, column definitions, data types, and primary key constraints.
+    """
+    try:
+        from sqlalchemy import inspect
+        def _get_schema(conn):
+            insp = inspect(conn)
+            table_names = insp.get_table_names()
+            tables_meta = []
+            for t in table_names:
+                cols = insp.get_columns(t)
+                pk = insp.get_pk_constraint(t)
+                pk_cols = pk.get("constrained_columns", []) if pk else []
+                tables_meta.append({
+                    "table_name": t,
+                    "columns": [
+                        {
+                            "name": c["name"],
+                            "type": str(c["type"]),
+                            "nullable": c.get("nullable", True),
+                            "primary_key": c["name"] in pk_cols
+                        }
+                        for c in cols
+                    ]
+                })
+            return tables_meta
+
+        async with ops_db.engine.connect() as conn:
+            schema_data = await conn.run_sync(_get_schema)
+
+        return create_success_envelope(
+            system="postgresql",
+            tool="inspect_database_schema",
+            data={
+                "tables": schema_data,
+                "total_tables": len(schema_data),
+                "dialect": "postgresql" if "postgresql" in ops_db.db_url else "sqlite"
+            },
+            resource_ids_urls=[t["table_name"] for t in schema_data]
+        )
+    except Exception as ex:
+        return create_error_envelope(
+            system="postgresql",
+            tool="inspect_database_schema",
+            error=str(ex),
+            error_category="SCHEMA_INSPECTION_ERROR",
+            retryable=True
+        )
+
+import re
+
+FORBIDDEN_SQL_PATTERNS = re.compile(
+    r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|REPLACE|EXEC|EXECUTE)\b",
+    re.IGNORECASE
+)
+
+@mcp.tool()
+async def execute_read_only_query(query: str, max_rows: int = 50, workspace_id: str = "default-ops") -> Dict[str, Any]:
+    """
+    Safely execute a validated read-only SQL query against the operations database.
+    Enforces strict SELECT-only execution; rejects DDL, DML, and multi-statement queries.
+    """
+    clean_query = query.strip().rstrip(";").strip()
+
+    if not clean_query:
+        return create_error_envelope(
+            system="postgresql",
+            tool="execute_read_only_query",
+            error="Query string cannot be empty",
+            error_category="INVALID_QUERY"
+        )
+
+    # Strip SQL comments to prevent comment-based evasion
+    uncommented = re.sub(r"--.*$", "", clean_query, flags=re.MULTILINE)
+    uncommented = re.sub(r"/\*.*?\*/", "", uncommented, flags=re.DOTALL).strip()
+
+    if not uncommented:
+        return create_error_envelope(
+            system="postgresql",
+            tool="execute_read_only_query",
+            error="Query contains only comments or whitespace",
+            error_category="INVALID_QUERY"
+        )
+
+    if ";" in uncommented or ";" in clean_query:
+        return create_error_envelope(
+            system="postgresql",
+            tool="execute_read_only_query",
+            error="Multi-statement SQL execution is strictly forbidden for security.",
+            error_category="UNAUTHORIZED_SQL"
+        )
+
+    match = FORBIDDEN_SQL_PATTERNS.search(uncommented) or FORBIDDEN_SQL_PATTERNS.search(clean_query)
+    if match:
+        return create_error_envelope(
+            system="postgresql",
+            tool="execute_read_only_query",
+            error=f"Forbidden keyword '{match.group(0).upper()}' detected. Modification queries require cryptographic human approval through designated write tools.",
+            error_category="UNAUTHORIZED_SQL"
+        )
+
+    if not re.match(r"^(SELECT|WITH)\b", uncommented, re.IGNORECASE):
+        return create_error_envelope(
+            system="postgresql",
+            tool="execute_read_only_query",
+            error="Only read-only SELECT or WITH statements are authorized. Modifications require cryptographic approval.",
+            error_category="UNAUTHORIZED_SQL"
+        )
+
+    limit = min(max(1, max_rows), 100)
+    if "LIMIT" not in clean_query.upper():
+        clean_query = f"{clean_query} LIMIT {limit}"
+
+    import time
+    start = time.perf_counter()
+    try:
+        from sqlalchemy import text
+        async with ops_db.session_factory() as session:
+            result = await session.execute(text(clean_query))
+            rows = result.mappings().all()
+            duration_ms = round((time.perf_counter() - start) * 1000, 2)
+
+            data_rows = []
+            for r in rows:
+                row_dict = {}
+                for k, v in dict(r).items():
+                    if isinstance(v, (datetime.datetime, datetime.date)):
+                        row_dict[k] = v.isoformat()
+                    else:
+                        row_dict[k] = v
+                data_rows.append(row_dict)
+
+            return create_success_envelope(
+                system="postgresql",
+                tool="execute_read_only_query",
+                data={
+                    "query": clean_query,
+                    "row_count": len(data_rows),
+                    "execution_time_ms": duration_ms,
+                    "rows": data_rows
+                }
+            )
+    except Exception as ex:
+        return create_error_envelope(
+            system="postgresql",
+            tool="execute_read_only_query",
+            error=f"SQL execution error: {str(ex)}",
+            error_category="QUERY_EXECUTION_ERROR",
+            retryable=False
+        )
+
 if __name__ == "__main__":
     mcp.run()
+

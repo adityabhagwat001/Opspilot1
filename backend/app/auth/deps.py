@@ -4,7 +4,7 @@ Enforces strict JWT token validation, eliminates anonymous fallback,
 and guarantees workspace authorization checks.
 """
 
-from typing import Optional
+from typing import Optional, List
 from fastapi import Depends, HTTPException, Header, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +12,7 @@ from sqlalchemy import select
 from app.core.db import get_db
 from app.core.security import decode_access_token
 from app.models.models import User, Workspace, WorkspaceMember
+from app.core.permissions import has_permission, get_role_permissions, ROLE_ADMIN
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
 
@@ -55,7 +56,17 @@ async def get_current_workspace_member(
     Validates workspace membership for the authenticated user.
     Prevents cross-tenant and cross-workspace access.
     """
-    target_workspace_id = x_workspace_id or "default-ops"
+    if x_workspace_id:
+        target_workspace_id = x_workspace_id
+    else:
+        # Determine the user's registered workspace from their membership records
+        user_mem_stmt = (
+            select(WorkspaceMember)
+            .where(WorkspaceMember.user_id == user.id)
+            .order_by(WorkspaceMember.id.desc())
+        )
+        primary_mem = (await db.execute(user_mem_stmt)).scalars().first()
+        target_workspace_id = primary_mem.workspace_id if primary_mem else "default-ops"
     
     # Check workspace existence
     ws_stmt = select(Workspace).where(Workspace.id == target_workspace_id)
@@ -74,7 +85,7 @@ async def get_current_workspace_member(
     membership = (await db.execute(mem_stmt)).scalar_one_or_none()
     
     if not membership:
-        if user.role == "admin":
+        if user.role == "admin" and user.email == "admin@opspilot.internal":
             # Platform administrators have supervisory access
             return WorkspaceMember(
                 id=f"admin-member-{user.id}",
@@ -98,3 +109,17 @@ def require_role(allowed_roles: list[str]):
             )
         return user
     return role_checker
+
+def require_permission(permission: str):
+    """
+    FastAPI dependency enforcing granular permission authorization.
+    Rejects unauthorized access with HTTP 403 Forbidden.
+    """
+    async def permission_checker(user: User = Depends(get_current_user)) -> User:
+        if not has_permission(user.role, permission):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Action forbidden: Role '{user.role}' lacks required permission '{permission}'."
+            )
+        return user
+    return permission_checker

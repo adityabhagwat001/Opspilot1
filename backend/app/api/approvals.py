@@ -6,7 +6,7 @@ Enforces human authorization decisions, parameter verification, workspace isolat
 import json
 import datetime
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Header, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete
 from app.core.db import get_db
@@ -100,14 +100,16 @@ async def get_approval(
 @router.post("/{approval_id}/approve")
 async def approve_request(
     approval_id: str,
+    x_enforce_sod: Optional[str] = Header(None, alias="X-Enforce-Separation-Of-Duties"),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_role(["admin", "operator"])),
+    user: User = Depends(require_role(["admin"])),
     member: WorkspaceMember = Depends(get_current_workspace_member)
 ):
     """
     Approves the exact proposed write action and executes it with an issued cryptographic token.
-    Enforces workspace membership and role restrictions.
+    Enforces Enterprise Administrator authorization and Separation of Duties when required.
     """
+    import os
     check_stmt = select(ApprovalRequest).where(
         ApprovalRequest.id == approval_id,
         ApprovalRequest.workspace_id == member.workspace_id
@@ -116,10 +118,21 @@ async def approve_request(
     if not req:
         raise HTTPException(status_code=404, detail="Approval request not found or unauthorized.")
 
+    enforce_sod = (
+        (x_enforce_sod and x_enforce_sod.lower() in ("true", "1")) or
+        os.getenv("ENFORCE_SEPARATION_OF_DUTIES", "false").lower() in ("true", "1")
+    )
+    if enforce_sod and req.requesting_user_id == user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Separation of duties violation: Requester cannot approve their own fix request."
+        )
+
     res = await approval_service.approve_and_execute(
         db=db,
         approval_id=approval_id,
-        approver_user_id=user.id
+        approver_user_id=user.id,
+        enforce_separation_of_duties=enforce_sod
     )
     if res.get("status") in ("ERROR", "SECURITY_ERROR"):
         raise HTTPException(status_code=400, detail=res.get("error"))
@@ -134,7 +147,10 @@ async def reject_request(
     member: WorkspaceMember = Depends(get_current_workspace_member)
 ):
     """
-    Rejects the proposed write action. Guarantees no tool execution occurs.
+    Rejects the proposed write action.
+    Enterprise Administrators can reject any request.
+    Operators can only cancel their own submitted proposals, not act as an administrator.
+    Guarantees no tool execution occurs.
     """
     check_stmt = select(ApprovalRequest).where(
         ApprovalRequest.id == approval_id,
@@ -144,13 +160,19 @@ async def reject_request(
     if not req:
         raise HTTPException(status_code=404, detail="Approval request not found or unauthorized.")
 
+    if user.role != "admin" and req.requesting_user_id != user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Action forbidden: Operator cannot reject requests as an administrator."
+        )
+
     res = await approval_service.reject_request(
         db=db,
         approval_id=approval_id,
         user_id=user.id,
         reason=payload.reason
     )
-    if res.get("status") == "ERROR":
+    if res.get("status") in ("ERROR", "SECURITY_ERROR"):
         raise HTTPException(status_code=400, detail=res.get("error"))
     return res
 
@@ -158,11 +180,12 @@ async def reject_request(
 async def delete_approval(
     approval_id: str,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_role(["admin", "operator"])),
+    user: User = Depends(require_role(["admin"])),
     member: WorkspaceMember = Depends(get_current_workspace_member)
 ):
     """
     Deletes an individual approval request record and its consumed tokens.
+    Restricted to Enterprise Administrators.
     """
     stmt = select(ApprovalRequest).where(
         ApprovalRequest.id == approval_id,
@@ -180,11 +203,12 @@ async def delete_approval(
 @router.post("/purge")
 async def purge_approvals(
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_role(["admin", "operator"])),
+    user: User = Depends(require_role(["admin"])),
     member: WorkspaceMember = Depends(get_current_workspace_member)
 ):
     """
     Purges all inactive, expired, failed, or rejected approvals in the workspace.
+    Restricted to Enterprise Administrators.
     """
     stmt = select(ApprovalRequest).where(
         ApprovalRequest.workspace_id == member.workspace_id,

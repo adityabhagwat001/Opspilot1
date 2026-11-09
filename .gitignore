@@ -33,6 +33,11 @@ token.json
 # Database files
 *.sqlite3
 *.db
+*.db.*
+*.db.backup*
+
+# Temporary scratch & artifacts
+scratch/
 
 # Logs
 *.log

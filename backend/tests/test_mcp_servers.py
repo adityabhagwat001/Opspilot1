@@ -10,7 +10,10 @@ from mcp_servers.postgres_server.server import (
     list_incidents,
     get_incident_details,
     create_operational_task,
-    get_operations_summary
+    get_operations_summary,
+    inspect_database_schema,
+    execute_read_only_query,
+    check_database_health
 )
 from mcp_servers.github_server.server import (
     mcp as gh_mcp,
@@ -31,7 +34,10 @@ async def test_postgres_mcp_tool_discovery():
     assert "list_incidents" in tool_names
     assert "get_operations_summary" in tool_names
     assert "create_operational_task" in tool_names
-    assert len(tools) >= 9
+    assert "inspect_database_schema" in tool_names
+    assert "execute_read_only_query" in tool_names
+    assert "check_database_health" in tool_names
+    assert len(tools) >= 12
 
 @pytest.mark.asyncio
 async def test_postgres_mcp_read_incidents():
@@ -46,6 +52,52 @@ async def test_postgres_mcp_read_incidents():
     assert "id" in first
     assert "title" in first
     assert "severity" in first
+
+@pytest.mark.asyncio
+async def test_postgres_mcp_schema_inspection():
+    envelope = await inspect_database_schema()
+    assert envelope["success"] is True
+    assert envelope["system"] == "postgresql"
+    data = envelope["data"]
+    assert "tables" in data
+    assert data["total_tables"] >= 3
+    table_names = [t["table_name"] for t in data["tables"]]
+    assert "operational_incidents" in table_names
+
+@pytest.mark.asyncio
+async def test_postgres_mcp_read_only_query():
+    envelope = await execute_read_only_query("SELECT id, title, severity FROM operational_incidents LIMIT 5")
+    assert envelope["success"] is True
+    assert envelope["system"] == "postgresql"
+    data = envelope["data"]
+    assert data["row_count"] >= 1
+    assert "rows" in data
+    assert "id" in data["rows"][0]
+
+@pytest.mark.asyncio
+async def test_postgres_mcp_destructive_sql_rejection():
+    # 1. Reject DDL (DROP TABLE)
+    env1 = await execute_read_only_query("DROP TABLE operational_incidents")
+    assert env1["success"] is False
+    assert env1["error_category"] == "UNAUTHORIZED_SQL"
+
+    # 2. Reject multi-statement / stacked query injection
+    env2 = await execute_read_only_query("SELECT 1; DROP TABLE operational_incidents")
+    assert env2["success"] is False
+    assert env2["error_category"] == "UNAUTHORIZED_SQL"
+
+    # 3. Reject DML (DELETE)
+    env3 = await execute_read_only_query("DELETE FROM operational_incidents")
+    assert env3["success"] is False
+    assert env3["error_category"] == "UNAUTHORIZED_SQL"
+
+@pytest.mark.asyncio
+async def test_postgres_mcp_database_health():
+    envelope = await check_database_health()
+    assert envelope["success"] is True
+    assert envelope["data"]["healthy"] is True
+    assert envelope["data"]["status"] == "connected"
+    assert "latency_ms" in envelope["data"]
 
 @pytest.mark.asyncio
 async def test_postgres_mcp_write_requires_approval():

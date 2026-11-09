@@ -11,7 +11,14 @@ import {
   WorkflowFailureItem,
   FixProposalItem,
   GitHubHealth,
-  GitHubNotificationItem
+  GitHubNotificationItem,
+  RepositoryOverview,
+  StructuredAnalysis,
+  SolutionHistory,
+  CompanyDetails,
+  CompanyMember,
+  WorkspaceInvitationItem,
+  UserWorkspace
 } from '../types';
 
 const API_BASE = '/api';
@@ -38,8 +45,97 @@ export const api = {
     const res = await apiClient.post('/auth/login', { email, password });
     return res.data;
   },
+  registerIndividual: async (data: {
+    full_name: string;
+    email: string;
+    password: string;
+    confirm_password: string;
+  }): Promise<{ status: string; message: string; user_id: string; verification_token: string; verification_url: string }> => {
+    const res = await apiClient.post('/auth/register/individual', data);
+    return res.data;
+  },
+  registerCompany: async (data: {
+    company_name: string;
+    company_email?: string;
+    company_website?: string;
+    industry?: string;
+    admin_full_name: string;
+    admin_email: string;
+    password: string;
+    confirm_password: string;
+  }): Promise<{ status: string; message: string; workspace_id: string; admin_user_id: string; verification_token: string; verification_url: string }> => {
+    const res = await apiClient.post('/auth/register/company', data);
+    return res.data;
+  },
+  verifyEmail: async (token: string): Promise<{ status: string; message: string }> => {
+    const res = await apiClient.post('/auth/verify-email', { token });
+    return res.data;
+  },
+  resendVerification: async (email: string): Promise<{ status: string; message: string; verification_url?: string }> => {
+    const res = await apiClient.post('/auth/resend-verification', { email });
+    return res.data;
+  },
+  forgotPassword: async (email: string): Promise<{ status: string; message: string; reset_url?: string }> => {
+    const res = await apiClient.post('/auth/forgot-password', { email });
+    return res.data;
+  },
+  resetPassword: async (data: {
+    token: string;
+    new_password: string;
+    confirm_password: string;
+  }): Promise<{ status: string; message: string }> => {
+    const res = await apiClient.post('/auth/reset-password', data);
+    return res.data;
+  },
+  inviteEmployee: async (email: string, role: string = 'operator'): Promise<{ status: string; message: string; invitation_token: string; invite_url: string }> => {
+    const res = await apiClient.post('/auth/invite', { email, role });
+    return res.data;
+  },
+  registerInvite: async (data: {
+    token: string;
+    full_name: string;
+    password: string;
+    confirm_password: string;
+  }): Promise<{ status: string; message: string }> => {
+    const res = await apiClient.post('/auth/register-invite', data);
+    return res.data;
+  },
   getMe: async (): Promise<User> => {
     const res = await apiClient.get('/auth/me');
+    return res.data;
+  },
+  getUserWorkspaces: async (): Promise<UserWorkspace[]> => {
+    const res = await apiClient.get('/auth/workspaces');
+    return res.data;
+  },
+  switchWorkspace: async (workspaceId: string): Promise<{ access_token: string; workspace: any }> => {
+    const res = await apiClient.post('/auth/switch-workspace', { workspace_id: workspaceId });
+    return res.data;
+  },
+
+  // Company Management
+  getCompanyDetails: async (): Promise<CompanyDetails> => {
+    const res = await apiClient.get('/company');
+    return res.data;
+  },
+  getCompanyMembers: async (): Promise<CompanyMember[]> => {
+    const res = await apiClient.get('/company/members');
+    return res.data;
+  },
+  updateMemberRole: async (memberId: string, role: string): Promise<{ status: string; message: string; member_id: string; new_role: string }> => {
+    const res = await apiClient.put(`/company/members/${memberId}/role`, { role });
+    return res.data;
+  },
+  removeMember: async (memberId: string): Promise<{ status: string; message: string }> => {
+    const res = await apiClient.delete(`/company/members/${memberId}`);
+    return res.data;
+  },
+  getCompanyInvitations: async (): Promise<WorkspaceInvitationItem[]> => {
+    const res = await apiClient.get('/company/invitations');
+    return res.data;
+  },
+  revokeInvitation: async (invitationId: string): Promise<{ status: string; message: string }> => {
+    const res = await apiClient.delete(`/company/invitations/${invitationId}`);
     return res.data;
   },
 
@@ -133,8 +229,49 @@ export const api = {
     return res.data;
   },
 
+  getAuditSolution: async (auditId: string): Promise<SolutionHistory> => {
+    const res = await apiClient.get(`/audit/${auditId}/solution`);
+    return res.data;
+  },
+
   getGitHubAccount: async (): Promise<GitHubAccount> => {
     const res = await apiClient.get('/github/account');
+    return res.data;
+  },
+
+  getConnectedAccounts: async (): Promise<Array<{
+    id: string;
+    login: string;
+    name: string;
+    avatar_url: string;
+    is_active: boolean;
+    status: string;
+    monitored_repositories_count: number;
+    last_synced_at?: string;
+  }>> => {
+    const res = await apiClient.get('/github/accounts');
+    return res.data;
+  },
+
+  switchGitHubAccount: async (payload: { account_login?: string; connection_id?: string }): Promise<{
+    status: string;
+    active_account: { id: string; login: string; name: string; avatar_url: string };
+    message: string;
+  }> => {
+    const res = await apiClient.post('/github/accounts/switch', payload);
+    return res.data;
+  },
+
+  getWebhookStatus: async (): Promise<{
+    status: string;
+    is_publicly_reachable: boolean;
+    total_events_received: number;
+    last_event_at?: string;
+    webhook_url: string;
+    secret_configured: boolean;
+    guidance?: string;
+  }> => {
+    const res = await apiClient.get('/github/webhook/status');
     return res.data;
   },
 
@@ -155,6 +292,11 @@ export const api = {
 
   getGitHubRepositories: async (): Promise<{ count: number; repositories: GitHubRepository[] }> => {
     const res = await apiClient.get('/github/repositories');
+    return res.data;
+  },
+
+  getRepositoryOverview: async (owner: string, repo: string): Promise<RepositoryOverview> => {
+    const res = await apiClient.get(`/github/repositories/${owner}/${repo}/overview`);
     return res.data;
   },
 
@@ -199,11 +341,14 @@ export const api = {
   analyzeFailure: async (
     failureId: string
   ): Promise<{
+    status: string;
     failure_id: string;
     root_cause: string;
     suggested_fix: string;
     failing_step?: string;
     analysis_summary?: string;
+    analysis_status?: string;
+    structured_analysis?: StructuredAnalysis;
   }> => {
     const res = await apiClient.post(`/github/failures/${failureId}/analyze`);
     return res.data;
@@ -213,6 +358,7 @@ export const api = {
     failureId: string
   ): Promise<{
     status: string;
+    message?: string;
     proposal_id: string;
     approval_id?: string;
     files_changed?: string[];
@@ -220,6 +366,40 @@ export const api = {
     branch_name?: string;
   }> => {
     const res = await apiClient.post(`/github/failures/${failureId}/propose-fix`);
+    return res.data;
+  },
+
+  verifyProposalResolution: async (proposalId: string): Promise<{
+    status: string;
+    message?: string;
+    proposal_id: string;
+    pr_status: string;
+    resolution_status: string;
+    verification: any;
+  }> => {
+    const res = await apiClient.post(`/github/proposals/${proposalId}/verify`);
+    return res.data;
+  },
+
+  verifyFailureResolution: async (failureId: string): Promise<{
+    status: string;
+    failure_id: string;
+    message?: string;
+    proposal_id: string;
+    resolution_status: string;
+    verification: any;
+  }> => {
+    const res = await apiClient.post(`/github/failures/${failureId}/verify`);
+    return res.data;
+  },
+
+  getProposalSolution: async (proposalId: string): Promise<SolutionHistory> => {
+    const res = await apiClient.get(`/github/proposals/${proposalId}/solution`);
+    return res.data;
+  },
+
+  getFailureSolution: async (failureId: string): Promise<SolutionHistory> => {
+    const res = await apiClient.get(`/github/failures/${failureId}/solution`);
     return res.data;
   },
 

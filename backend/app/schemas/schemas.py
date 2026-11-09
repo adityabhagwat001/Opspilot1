@@ -33,3 +33,49 @@ class GitHubConnectRequest(BaseModel):
     username: Optional[str] = None
     default_repo: Optional[str] = None
 
+class RegisterIndividualRequest(BaseModel):
+    full_name: str
+    email: EmailStr
+    password: str
+    confirm_password: str
+
+class RegisterCompanyRequest(BaseModel):
+    company_name: str
+    company_email: Optional[EmailStr] = None
+    company_website: Optional[str] = None
+    industry: Optional[str] = None
+    admin_full_name: str
+    admin_email: EmailStr
+    password: str
+    confirm_password: str
+
+class VerifyEmailRequest(BaseModel):
+    token: str
+
+class ResendVerificationRequest(BaseModel):
+    email: EmailStr
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+    confirm_password: str
+
+class InviteEmployeeRequest(BaseModel):
+    email: EmailStr
+    role: Optional[str] = "operator"
+
+class RegisterInviteRequest(BaseModel):
+    token: str
+    full_name: str
+    password: str
+    confirm_password: str
+
+class UpdateMemberRoleRequest(BaseModel):
+    role: str
+
+class SwitchWorkspaceRequest(BaseModel):
+    workspace_id: str
+
